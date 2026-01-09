@@ -10,23 +10,26 @@ Asistente de batería para Linux con notificaciones de audio.
 - ✅ Aviso de carga completa (> 95%)
 - 🚀 Se inicia automáticamente con el sistema
 
-## 📦 Instalación
+## 💻 Sistemas compatibles
 
-Requiere [Rust](https://rustup.rs/) instalado.
+- Arch Linux / Manjaro / EndeavourOS
+- Debian / Ubuntu / Linux Mint
+- Fedora / RHEL
+
+## 📦 Instalación
 
 ```bash
 git clone https://github.com/tu-usuario/battery-assistant.git
 cd battery-assistant
-cargo build --release
-sudo ./install.sh
+./install.sh
 ```
+
+El instalador verificará e instalará las dependencias automáticamente.
 
 ## 🗑️ Desinstalar
 
 ```bash
-sudo rm /usr/local/bin/battery-assistant
-sudo rm -rf /usr/share/battery-assistant
-rm ~/.config/autostart/battery-assistant.desktop
+sudo ./uninstall.sh
 ```
 
 ## 📄 Licencia

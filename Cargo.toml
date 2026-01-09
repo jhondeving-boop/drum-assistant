@@ -1,9 +1,15 @@
 [package]
 name = "battery_assistant"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+authors = ["Jhonny"]
+description = "Asistente de batería para Linux con notificaciones de audio"
+license = "MIT"
+repository = "https://github.com/tu-usuario/battery-assistant"
+keywords = ["battery", "linux", "notification", "audio"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 battery = "0.7"
 notify-rust = "4"
-rodio = { version = "0.19", default-features = false, features = ["minimp3"] } 
+rodio = { version = "0.19", default-features = false, features = ["minimp3"] }

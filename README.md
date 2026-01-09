@@ -19,8 +19,8 @@ Asistente de batería para Linux con notificaciones de audio.
 ## 📦 Instalación
 
 ```bash
-git clone https://github.com/tu-usuario/battery-assistant.git
-cd battery-assistant
+git clone https://github.com/jhondeving-boop/asistente_bateria.git
+cd asistente_bateria
 ./install.sh
 ```
 

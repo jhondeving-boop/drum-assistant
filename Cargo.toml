@@ -1,0 +1,9 @@
+[package]
+name = "battery_assistant"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+battery = "0.7"
+notify-rust = "4"
+rodio = { version = "0.19", default-features = false, features = ["minimp3"] } 

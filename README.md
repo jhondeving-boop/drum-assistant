@@ -26,6 +26,15 @@ cd battery-assistant
 
 El instalador verificará e instalará las dependencias automáticamente.
 
+### 🔄 Actualizar
+
+Simplemente descarga los cambios y ejecuta el instalador de nuevo (reemplazará el ejecutable automáticamente):
+
+```bash
+git pull
+./install.sh
+```
+
 ## 🗑️ Desinstalar
 
 ```bash

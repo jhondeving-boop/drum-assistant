@@ -21,9 +21,12 @@ fn main() -> Result<(), battery::Error> {
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .unwrap_or_default();
     let current_dir = std::env::current_dir().unwrap_or_default();
+    let assets_dir = current_dir.join("assets");
     
     let audio_base = if system_path.join("conectado.mp3").exists() {
         system_path
+    } else if assets_dir.join("conectado.mp3").exists() {
+        assets_dir
     } else if exe_dir.join("conectado.mp3").exists() {
         exe_dir
     } else {

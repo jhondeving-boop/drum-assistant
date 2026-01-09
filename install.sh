@@ -1,11 +1,17 @@
 #!/bin/bash
 
-# Script de instalación para Battery Assistant
+# Instalador para Battery Assistant
 # Ejecutar con: sudo ./install.sh
 
 set -e
 
 echo "🔋 Instalando Battery Assistant..."
+
+# Compilar si no existe
+if [ ! -f "target/release/battery_assistant" ]; then
+    echo "🔨 Compilando..."
+    cargo build --release
+fi
 
 # Crear directorio para archivos de audio
 sudo mkdir -p /usr/share/battery-assistant
@@ -14,8 +20,8 @@ sudo mkdir -p /usr/share/battery-assistant
 sudo cp target/release/battery_assistant /usr/local/bin/battery-assistant
 sudo chmod +x /usr/local/bin/battery-assistant
 
-# Copiar archivos de audio
-sudo cp *.mp3 /usr/share/battery-assistant/
+# Copiar archivos de audio desde assets/
+sudo cp assets/*.mp3 /usr/share/battery-assistant/
 
 # Crear archivo .desktop para autostart
 mkdir -p ~/.config/autostart
@@ -40,4 +46,3 @@ echo "🔊 Audios: /usr/share/battery-assistant/"
 echo "🚀 Autostart: ~/.config/autostart/battery-assistant.desktop"
 echo ""
 echo "Puedes ejecutar ahora con: battery-assistant"
-echo "Se iniciará automáticamente con el sistema."

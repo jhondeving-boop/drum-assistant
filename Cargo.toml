@@ -5,7 +5,7 @@ edition = "2024"
 authors = ["Jhonny"]
 description = "Asistente de batería para Linux con notificaciones de audio"
 license = "MIT"
-repository = "https://github.com/tu-usuario/battery-assistant"
+repository = "https://github.com/jhondeving-boop/asistente_bateria"
 keywords = ["battery", "linux", "notification", "audio"]
 categories = ["command-line-utilities"]
 

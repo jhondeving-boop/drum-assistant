@@ -10,7 +10,7 @@ AUTO_YES=0
 ALLOW_RUST_INSTALL=1
 ALLOW_DEPS_INSTALL=1
 
-usage() {
+mostrar_ayuda() {
     cat <<'EOF'
 Uso: ./install.sh [opciones]
 
@@ -22,16 +22,16 @@ Opciones:
 EOF
 }
 
-on_error() {
+al_error() {
     local exit_code=$?
     echo ""
     echo "❌ Error en la linea ${1}. Abortando (codigo ${exit_code})."
     exit "$exit_code"
 }
 
-trap 'on_error $LINENO' ERR
+trap 'al_error $LINENO' ERR
 
-step() {
+paso() {
     CURRENT_STEP=$((CURRENT_STEP + 1))
     STEP_TIMER=$SECONDS
     echo ""
@@ -42,12 +42,12 @@ ok() {
     echo "   ✓ $1"
 }
 
-step_done() {
+paso_completado() {
     local elapsed=$((SECONDS - STEP_TIMER))
     echo "   ⏱ Completado en ${elapsed}s"
 }
 
-confirm() {
+confirmar() {
     local message="$1"
     local answer
     if [ "$AUTO_YES" -eq 1 ]; then
@@ -58,7 +58,7 @@ confirm() {
     [[ "$answer" =~ ^[Yy]$ ]]
 }
 
-detect_package_manager() {
+detectar_gestor_paquetes() {
     if command -v pacman >/dev/null 2>&1; then
         echo "pacman"
     elif command -v apt >/dev/null 2>&1; then
@@ -70,9 +70,9 @@ detect_package_manager() {
     fi
 }
 
-install_dependencies() {
+instalar_dependencias() {
     local pm
-    pm=$(detect_package_manager)
+    pm=$(detectar_gestor_paquetes)
 
     echo "📦 Instalando dependencias del sistema..."
 
@@ -95,7 +95,7 @@ install_dependencies() {
     esac
 }
 
-create_default_config_if_missing() {
+crear_config_por_defecto_si_falta() {
     mkdir -p "$HOME/.config/battery-assistant"
     if [ ! -f "$HOME/.config/battery-assistant/config.toml" ]; then
         cat > "$HOME/.config/battery-assistant/config.toml" <<'EOF'
@@ -121,12 +121,12 @@ while [ "$#" -gt 0 ]; do
             ALLOW_DEPS_INSTALL=0
             ;;
         -h|--help)
-            usage
+            mostrar_ayuda
             exit 0
             ;;
         *)
             echo "❌ Opcion desconocida: $1"
-            usage
+            mostrar_ayuda
             exit 1
             ;;
     esac
@@ -138,7 +138,7 @@ echo "=================================="
 echo ""
 INSTALL_TIMER=$SECONDS
 
-step "Verificando dependencias"
+paso "Verificando dependencias"
 if ! command -v cargo >/dev/null 2>&1; then
     echo "❌ Rust no esta instalado."
 
@@ -147,7 +147,7 @@ if ! command -v cargo >/dev/null 2>&1; then
         exit 1
     fi
 
-    if confirm "Deseas instalar Rust"; then
+    if confirmar "Deseas instalar Rust"; then
         echo "📥 Instalando Rust..."
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
         # shellcheck source=/dev/null
@@ -160,9 +160,9 @@ if ! command -v cargo >/dev/null 2>&1; then
 else
     ok "Rust instalado"
 fi
-step_done
+paso_completado
 
-step "Verificando dependencias de audio (ALSA)"
+paso "Verificando dependencias de audio (ALSA)"
 if ! pkg-config --exists alsa 2>/dev/null; then
     echo "❌ Dependencias ALSA no encontradas."
 
@@ -171,8 +171,8 @@ if ! pkg-config --exists alsa 2>/dev/null; then
         exit 1
     fi
 
-    if confirm "Deseas instalar las dependencias de audio"; then
-        install_dependencies
+    if confirmar "Deseas instalar las dependencias de audio"; then
+        instalar_dependencias
         ok "Dependencias de audio instaladas"
     else
         echo "❌ Las dependencias de audio son necesarias."
@@ -181,14 +181,14 @@ if ! pkg-config --exists alsa 2>/dev/null; then
 else
     ok "Dependencias de audio instaladas"
 fi
-step_done
+paso_completado
 
-step "Compilando en modo release"
+paso "Compilando en modo release"
 cargo build --release
 ok "Compilacion finalizada"
-step_done
+paso_completado
 
-step "Instalando en el sistema"
+paso "Instalando en el sistema"
 echo "   ...deteniendo servicio actual si existe"
 systemctl --user stop battery-assistant 2>/dev/null || true
 ok "Servicio detenido (si existia)"
@@ -205,28 +205,28 @@ ok "Ejecutable instalado"
 echo "   ...copiando audios (requiere sudo)"
 sudo cp assets/*.mp3 /usr/share/battery-assistant/
 ok "Archivos de audio instalados"
-step_done
+paso_completado
 
-step "Configurando servicio systemd"
+paso "Configurando servicio systemd"
 mkdir -p "$HOME/.config/systemd/user"
 cp battery-assistant.service "$HOME/.config/systemd/user/"
 ok "Archivo de servicio copiado"
-create_default_config_if_missing
-step_done
+crear_config_por_defecto_si_falta
+paso_completado
 
-step "Recargando daemon de usuario"
+paso "Recargando daemon de usuario"
 systemctl --user daemon-reload
 ok "Daemon recargado"
-step_done
+paso_completado
 
-step "Habilitando e iniciando servicio"
+paso "Habilitando e iniciando servicio"
 systemctl --user enable --now battery-assistant
 ok "Servicio habilitado e iniciado"
-step_done
+paso_completado
 
-step "Verificando estado del servicio"
+paso "Verificando estado del servicio"
 ok "Instalacion completada"
-step_done
+paso_completado
 
 echo ""
 echo "✅ Instalacion completada"

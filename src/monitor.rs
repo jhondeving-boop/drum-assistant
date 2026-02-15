@@ -1,23 +1,23 @@
-use crate::audio::{AudioPaths, play_sound};
-use crate::config::AppConfig;
+use crate::audio::{RutasAudio, reproducir_sonido};
+use crate::config::ConfigApp;
 use crate::logger;
 use battery::units::ratio::percent;
 use battery::{Battery, State};
 use notify_rust::Notification;
 use std::time::{Duration, Instant};
 
-pub struct BatteryMonitor {
+pub struct MonitorBateria {
     estado_anterior: State,
     ultimo_aviso_baja: Option<Instant>,
     ultimo_aviso_cargada: Option<Instant>,
     umbral_baja: f32,
     umbral_alta: f32,
     cooldown: Duration,
-    paths: AudioPaths,
+    rutas_audio: RutasAudio,
 }
 
-impl BatteryMonitor {
-    pub fn new(config: AppConfig) -> Self {
+impl MonitorBateria {
+    pub fn new(config: ConfigApp) -> Self {
         Self {
             estado_anterior: State::Unknown,
             ultimo_aviso_baja: None,
@@ -25,12 +25,12 @@ impl BatteryMonitor {
             umbral_baja: config.umbral_baja,
             umbral_alta: config.umbral_alta,
             cooldown: Duration::from_secs(config.cooldown_segundos),
-            paths: AudioPaths::new(),
+            rutas_audio: RutasAudio::new(),
         }
     }
 
     /// Inicializa el estado para evitar alertas falsas al arrancar
-    pub fn init(&mut self, bateria: &Battery) {
+    pub fn inicializar(&mut self, bateria: &Battery) {
         self.estado_anterior = bateria.state();
         let porcentaje = bateria.state_of_charge().get::<percent>();
 
@@ -67,7 +67,7 @@ impl BatteryMonitor {
             State::Charging => {
                 println!("🔌 Cargador Conectado");
                 Self::notificar("Energía", "Cargador conectado");
-                play_sound(&self.paths.conectado);
+                reproducir_sonido(&self.rutas_audio.conectado);
                 self.ultimo_aviso_baja = None; // Reset alerta baja
                 true
             }
@@ -76,7 +76,7 @@ impl BatteryMonitor {
                 if self.estado_anterior == State::Charging || self.estado_anterior == State::Full {
                     println!("🔋 Cargador Desconectado");
                     Self::notificar("Energía", "Usando batería");
-                    play_sound(&self.paths.desconectado);
+                    reproducir_sonido(&self.rutas_audio.desconectado);
                     self.ultimo_aviso_cargada = None; // Reset alerta cargada
                     true
                 } else {
@@ -97,7 +97,7 @@ impl BatteryMonitor {
                     "Batería Baja",
                     &format!("Nivel crítico: {:.0}%. Conecta el cargador.", porcentaje),
                 );
-                play_sound(&self.paths.baja);
+                reproducir_sonido(&self.rutas_audio.baja);
                 self.ultimo_aviso_baja = Some(Instant::now());
             }
         } else if estado == State::Charging {
@@ -112,7 +112,7 @@ impl BatteryMonitor {
                     "Carga Suficiente",
                     &format!("Nivel: {:.0}%. Desconecta el cargador.", porcentaje),
                 );
-                play_sound(&self.paths.cargada);
+                reproducir_sonido(&self.rutas_audio.cargada);
                 self.ultimo_aviso_cargada = Some(Instant::now());
             }
         } else if estado == State::Discharging {
@@ -131,7 +131,7 @@ impl BatteryMonitor {
             .icon("battery")
             .show()
         {
-            logger::warn(&format!("No se pudo mostrar notificacion: {err}"));
+            logger::advertir(&format!("No se pudo mostrar notificacion: {err}"));
         }
     }
 }

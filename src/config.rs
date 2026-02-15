@@ -4,13 +4,13 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AppConfig {
+pub struct ConfigApp {
     pub umbral_baja: f32,
     pub umbral_alta: f32,
     pub cooldown_segundos: u64,
 }
 
-impl Default for AppConfig {
+impl Default for ConfigApp {
     fn default() -> Self {
         Self {
             umbral_baja: 20.0,
@@ -21,16 +21,16 @@ impl Default for AppConfig {
 }
 
 #[derive(Deserialize)]
-struct AppConfigParcial {
+struct ConfigAppParcial {
     umbral_baja: Option<f32>,
     umbral_alta: Option<f32>,
     cooldown_segundos: Option<u64>,
 }
 
-impl AppConfig {
-    pub fn load() -> Self {
+impl ConfigApp {
+    pub fn cargar() -> Self {
         let default_cfg = Self::default();
-        let Some(path) = config_path() else {
+        let Some(path) = ruta_config() else {
             return default_cfg;
         };
 
@@ -41,23 +41,23 @@ impl AppConfig {
         let contenido = match fs::read_to_string(&path) {
             Ok(c) => c,
             Err(err) => {
-                logger::warn(&format!("No se pudo leer {}: {}", path.display(), err));
+                logger::advertir(&format!("No se pudo leer {}: {}", path.display(), err));
                 return default_cfg;
             }
         };
 
-        let parcial = match toml::from_str::<AppConfigParcial>(&contenido) {
+        let parcial = match toml::from_str::<ConfigAppParcial>(&contenido) {
             Ok(cfg) => cfg,
             Err(err) => {
-                logger::warn(&format!("Config invalida en {}: {}", path.display(), err));
+                logger::advertir(&format!("Config invalida en {}: {}", path.display(), err));
                 return default_cfg;
             }
         };
 
-        Self::from_partial(parcial, default_cfg)
+        Self::desde_parcial(parcial, default_cfg)
     }
 
-    fn from_partial(parcial: AppConfigParcial, default_cfg: AppConfig) -> Self {
+    fn desde_parcial(parcial: ConfigAppParcial, default_cfg: ConfigApp) -> Self {
         let mut cfg = Self {
             umbral_baja: parcial.umbral_baja.unwrap_or(default_cfg.umbral_baja),
             umbral_alta: parcial.umbral_alta.unwrap_or(default_cfg.umbral_alta),
@@ -67,14 +67,14 @@ impl AppConfig {
         };
 
         if cfg.umbral_baja < 0.0 || cfg.umbral_alta > 100.0 || cfg.umbral_baja >= cfg.umbral_alta {
-            logger::warn(
+            logger::advertir(
                 "Config fuera de rango: umbral_baja debe ser < umbral_alta y ambos entre 0..=100. Usando valores por defecto.",
             );
             cfg = default_cfg;
         }
 
         if cfg.cooldown_segundos == 0 {
-            logger::warn("cooldown_segundos no puede ser 0. Usando valor por defecto (60).");
+            logger::advertir("cooldown_segundos no puede ser 0. Usando valor por defecto (60).");
             cfg.cooldown_segundos = default_cfg.cooldown_segundos;
         }
 
@@ -82,43 +82,43 @@ impl AppConfig {
     }
 }
 
-fn config_path() -> Option<PathBuf> {
+fn ruta_config() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(PathBuf::from(home).join(".config/battery-assistant/config.toml"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AppConfig, AppConfigParcial};
+    use super::{ConfigApp, ConfigAppParcial};
 
     #[test]
-    fn from_partial_uses_defaults_when_missing_fields() {
-        let cfg = AppConfig::from_partial(
-            AppConfigParcial {
+    fn desde_parcial_usa_defaults_si_faltan_campos() {
+        let cfg = ConfigApp::desde_parcial(
+            ConfigAppParcial {
                 umbral_baja: None,
                 umbral_alta: None,
                 cooldown_segundos: None,
             },
-            AppConfig::default(),
+            ConfigApp::default(),
         );
 
-        assert_eq!(cfg, AppConfig::default());
+        assert_eq!(cfg, ConfigApp::default());
     }
 
     #[test]
-    fn from_partial_accepts_valid_custom_values() {
-        let cfg = AppConfig::from_partial(
-            AppConfigParcial {
+    fn desde_parcial_acepta_valores_validos() {
+        let cfg = ConfigApp::desde_parcial(
+            ConfigAppParcial {
                 umbral_baja: Some(15.0),
                 umbral_alta: Some(90.0),
                 cooldown_segundos: Some(120),
             },
-            AppConfig::default(),
+            ConfigApp::default(),
         );
 
         assert_eq!(
             cfg,
-            AppConfig {
+            ConfigApp {
                 umbral_baja: 15.0,
                 umbral_alta: 90.0,
                 cooldown_segundos: 120,
@@ -127,10 +127,10 @@ mod tests {
     }
 
     #[test]
-    fn from_partial_resets_to_default_for_invalid_thresholds() {
-        let default_cfg = AppConfig::default();
-        let cfg = AppConfig::from_partial(
-            AppConfigParcial {
+    fn desde_parcial_restablece_default_si_umbral_invalido() {
+        let default_cfg = ConfigApp::default();
+        let cfg = ConfigApp::desde_parcial(
+            ConfigAppParcial {
                 umbral_baja: Some(85.0),
                 umbral_alta: Some(80.0),
                 cooldown_segundos: Some(10),
@@ -142,10 +142,10 @@ mod tests {
     }
 
     #[test]
-    fn from_partial_replaces_zero_cooldown_with_default() {
-        let default_cfg = AppConfig::default();
-        let cfg = AppConfig::from_partial(
-            AppConfigParcial {
+    fn desde_parcial_reemplaza_cooldown_cero_con_default() {
+        let default_cfg = ConfigApp::default();
+        let cfg = ConfigApp::desde_parcial(
+            ConfigAppParcial {
                 umbral_baja: Some(20.0),
                 umbral_alta: Some(80.0),
                 cooldown_segundos: Some(0),

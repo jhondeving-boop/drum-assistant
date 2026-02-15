@@ -5,14 +5,14 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::thread;
 
-pub struct AudioPaths {
+pub struct RutasAudio {
     pub conectado: PathBuf,
     pub desconectado: PathBuf,
     pub baja: PathBuf,
     pub cargada: PathBuf,
 }
 
-impl AudioPaths {
+impl RutasAudio {
     pub fn new() -> Self {
         // Orden de prioridad:
         // 1. /usr/share (Sistema Instalado)
@@ -46,13 +46,13 @@ impl AudioPaths {
     }
 }
 
-pub fn play_sound(ruta: &Path) {
+pub fn reproducir_sonido(ruta: &Path) {
     let ruta_archivo = ruta.to_path_buf();
     thread::spawn(move || {
         let (_stream, stream_handle) = match OutputStream::try_default() {
             Ok(v) => v,
             Err(err) => {
-                logger::warn(&format!("No se pudo inicializar salida de audio: {err}"));
+                logger::advertir(&format!("No se pudo inicializar salida de audio: {err}"));
                 return;
             }
         };
@@ -60,7 +60,7 @@ pub fn play_sound(ruta: &Path) {
         let sink = match Sink::try_new(&stream_handle) {
             Ok(s) => s,
             Err(err) => {
-                logger::warn(&format!("No se pudo crear sink de audio: {err}"));
+                logger::advertir(&format!("No se pudo crear sink de audio: {err}"));
                 return;
             }
         };
@@ -68,7 +68,7 @@ pub fn play_sound(ruta: &Path) {
         let file = match File::open(&ruta_archivo) {
             Ok(f) => f,
             Err(err) => {
-                logger::warn(&format!(
+                logger::advertir(&format!(
                     "No se pudo abrir archivo de audio {}: {err}",
                     ruta_archivo.display()
                 ));
@@ -79,7 +79,7 @@ pub fn play_sound(ruta: &Path) {
         let source = match Decoder::new(BufReader::new(file)) {
             Ok(s) => s,
             Err(err) => {
-                logger::warn(&format!(
+                logger::advertir(&format!(
                     "No se pudo decodificar audio {}: {err}",
                     ruta_archivo.display()
                 ));

@@ -1,0 +1,11 @@
+[Unit]
+Description=Battery Assistant Service
+After=sound.target
+
+[Service]
+ExecStart=/usr/local/bin/battery-assistant
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

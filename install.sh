@@ -9,6 +9,7 @@ echo "=================================="
 echo ""
 
 # Función para detectar el gestor de paquetes
+# Función para detectar el gestor de paquetes
 detect_package_manager() {
     if command -v pacman &> /dev/null; then
         echo "pacman"
@@ -44,15 +45,6 @@ install_dependencies() {
             exit 1
             ;;
     esac
-}
-
-# Verificar si se ejecuta como root solo cuando sea necesario
-check_root_for_install() {
-    if [ "$EUID" -ne 0 ]; then
-        echo "⚠️  La instalación del ejecutable necesita sudo."
-        echo "   Ejecuta: sudo ./install.sh"
-        exit 1
-    fi
 }
 
 # --- 1. Verificar Rust ---
@@ -106,39 +98,43 @@ echo ""
 echo "📥 Instalando en el sistema..."
 
 # Crear directorio para archivos de audio
+echo "   ...creando directorio de audios (requiere sudo)"
 sudo mkdir -p /usr/share/battery-assistant
 
 # Copiar el ejecutable
+echo "   ...copiando ejecutable (requiere sudo)"
 sudo cp target/release/battery_assistant /usr/local/bin/battery-assistant
 sudo chmod +x /usr/local/bin/battery-assistant
 echo "   ✓ Ejecutable instalado"
 
 # Copiar archivos de audio desde assets/
+echo "   ...copiando audios (requiere sudo)"
 sudo cp assets/*.mp3 /usr/share/battery-assistant/
 echo "   ✓ Archivos de audio instalados"
 
-# Crear archivo .desktop para autostart
-mkdir -p ~/.config/autostart
+# --- 5. Configurar Systemd User Service ---
+echo "⚙️  Configurando servicio systemd..."
 
-cat > ~/.config/autostart/battery-assistant.desktop << EOF
-[Desktop Entry]
-Type=Application
-Name=Battery Assistant
-Comment=Asistente de batería con notificaciones de audio
-Exec=/usr/local/bin/battery-assistant
-Icon=battery
-Terminal=false
-Categories=Utility;System;
-StartupNotify=false
-X-GNOME-Autostart-enabled=true
-EOF
-echo "   ✓ Autostart configurado"
+# Crear directorio de servicios de usuario si no existe
+mkdir -p ~/.config/systemd/user
+
+# Copiar archivo de servicio
+cp battery-assistant.service ~/.config/systemd/user/
+echo "   ✓ Archivo de servicio copiado"
+
+# Recargar daemon de usuario
+systemctl --user daemon-reload
+
+# Habilitar y arrancar servicio
+systemctl --user enable --now battery-assistant
+echo "   ✓ Servicio habilitado e iniciado"
 
 echo ""
 echo "✅ ¡Instalación completada!"
 echo ""
 echo "📍 Ejecutable: /usr/local/bin/battery-assistant"
 echo "🔊 Audios: /usr/share/battery-assistant/"
-echo "🚀 Autostart: ~/.config/autostart/battery-assistant.desktop"
+echo "⚙️  Servicio: ~/.config/systemd/user/battery-assistant.service"
 echo ""
-echo "Ejecuta ahora: battery-assistant &"
+echo "Estado del servicio:"
+systemctl --user status battery-assistant --no-pager | head -n 5

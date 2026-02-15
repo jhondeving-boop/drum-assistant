@@ -13,3 +13,5 @@ categories = ["command-line-utilities"]
 battery = "0.7"
 notify-rust = "4"
 rodio = { version = "0.19", default-features = false, features = ["minimp3"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

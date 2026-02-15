@@ -1,34 +1,82 @@
 #!/bin/bash
 
-# Instalador para Battery Assistant
+set -euo pipefail
 
-set -e
+TOTAL_STEPS=8
+CURRENT_STEP=0
+STEP_TIMER=0
+INSTALL_TIMER=0
+AUTO_YES=0
+ALLOW_RUST_INSTALL=1
+ALLOW_DEPS_INSTALL=1
 
-echo "🔋 Battery Assistant - Instalador"
-echo "=================================="
-echo ""
+usage() {
+    cat <<'EOF'
+Uso: ./install.sh [opciones]
 
-# Función para detectar el gestor de paquetes
-# Función para detectar el gestor de paquetes
+Opciones:
+  -y, --yes               Aceptar prompts automaticamente
+      --skip-rust-install No instalar Rust automaticamente
+      --skip-deps-install No instalar dependencias ALSA automaticamente
+  -h, --help              Mostrar esta ayuda
+EOF
+}
+
+on_error() {
+    local exit_code=$?
+    echo ""
+    echo "❌ Error en la linea ${1}. Abortando (codigo ${exit_code})."
+    exit "$exit_code"
+}
+
+trap 'on_error $LINENO' ERR
+
+step() {
+    CURRENT_STEP=$((CURRENT_STEP + 1))
+    STEP_TIMER=$SECONDS
+    echo ""
+    echo "[$CURRENT_STEP/$TOTAL_STEPS] $1"
+}
+
+ok() {
+    echo "   ✓ $1"
+}
+
+step_done() {
+    local elapsed=$((SECONDS - STEP_TIMER))
+    echo "   ⏱ Completado en ${elapsed}s"
+}
+
+confirm() {
+    local message="$1"
+    local answer
+    if [ "$AUTO_YES" -eq 1 ]; then
+        return 0
+    fi
+
+    read -r -p "$message (y/n): " answer
+    [[ "$answer" =~ ^[Yy]$ ]]
+}
+
 detect_package_manager() {
-    if command -v pacman &> /dev/null; then
+    if command -v pacman >/dev/null 2>&1; then
         echo "pacman"
-    elif command -v apt &> /dev/null; then
+    elif command -v apt >/dev/null 2>&1; then
         echo "apt"
-    elif command -v dnf &> /dev/null; then
+    elif command -v dnf >/dev/null 2>&1; then
         echo "dnf"
     else
         echo "unknown"
     fi
 }
 
-# Función para instalar dependencias
 install_dependencies() {
-    local pm=$(detect_package_manager)
-    
+    local pm
+    pm=$(detect_package_manager)
+
     echo "📦 Instalando dependencias del sistema..."
-    
-    case $pm in
+
+    case "$pm" in
         pacman)
             sudo pacman -S --needed --noconfirm alsa-lib base-devel
             ;;
@@ -47,94 +95,146 @@ install_dependencies() {
     esac
 }
 
-# --- 1. Verificar Rust ---
-echo "🔍 Verificando dependencias..."
-echo ""
+create_default_config_if_missing() {
+    mkdir -p "$HOME/.config/battery-assistant"
+    if [ ! -f "$HOME/.config/battery-assistant/config.toml" ]; then
+        cat > "$HOME/.config/battery-assistant/config.toml" <<'EOF'
+umbral_baja = 20
+umbral_alta = 80
+cooldown_segundos = 60
+EOF
+        ok "Configuracion creada en ~/.config/battery-assistant/config.toml"
+    else
+        ok "Configuracion existente preservada"
+    fi
+}
 
-if ! command -v cargo &> /dev/null; then
-    echo "❌ Rust no está instalado."
-    echo ""
-    read -p "¿Deseas instalar Rust? (y/n): " install_rust
-    
-    if [[ "$install_rust" =~ ^[Yy]$ ]]; then
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -y|--yes)
+            AUTO_YES=1
+            ;;
+        --skip-rust-install)
+            ALLOW_RUST_INSTALL=0
+            ;;
+        --skip-deps-install)
+            ALLOW_DEPS_INSTALL=0
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "❌ Opcion desconocida: $1"
+            usage
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+echo "🔋 Battery Assistant - Instalador"
+echo "=================================="
+echo ""
+INSTALL_TIMER=$SECONDS
+
+step "Verificando dependencias"
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "❌ Rust no esta instalado."
+
+    if [ "$ALLOW_RUST_INSTALL" -eq 0 ]; then
+        echo "   Instala Rust manualmente o ejecuta sin --skip-rust-install"
+        exit 1
+    fi
+
+    if confirm "Deseas instalar Rust"; then
         echo "📥 Instalando Rust..."
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        # shellcheck source=/dev/null
         source "$HOME/.cargo/env"
-        echo "✅ Rust instalado"
+        ok "Rust instalado"
     else
-        echo "❌ Rust es necesario para compilar. Abortando."
+        echo "❌ Rust es necesario para compilar."
         exit 1
     fi
 else
-    echo "   ✓ Rust instalado"
+    ok "Rust instalado"
 fi
+step_done
 
-# --- 2. Verificar dependencias de audio (ALSA) ---
+step "Verificando dependencias de audio (ALSA)"
 if ! pkg-config --exists alsa 2>/dev/null; then
-    echo "❌ Dependencias de audio (ALSA) no encontradas."
-    echo ""
-    read -p "¿Deseas instalar las dependencias de audio? (y/n): " install_deps
-    
-    if [[ "$install_deps" =~ ^[Yy]$ ]]; then
+    echo "❌ Dependencias ALSA no encontradas."
+
+    if [ "$ALLOW_DEPS_INSTALL" -eq 0 ]; then
+        echo "   Instalalas manualmente o ejecuta sin --skip-deps-install"
+        exit 1
+    fi
+
+    if confirm "Deseas instalar las dependencias de audio"; then
         install_dependencies
-        echo "✅ Dependencias instaladas"
+        ok "Dependencias de audio instaladas"
     else
-        echo "❌ Las dependencias de audio son necesarias. Abortando."
+        echo "❌ Las dependencias de audio son necesarias."
         exit 1
     fi
 else
-    echo "   ✓ Dependencias de audio instaladas"
+    ok "Dependencias de audio instaladas"
 fi
+step_done
 
-echo ""
-
-# --- 3. Compilar ---
-echo "🔨 Compilando..."
+step "Compilando en modo release"
 cargo build --release
+ok "Compilacion finalizada"
+step_done
 
-echo ""
+step "Instalando en el sistema"
+echo "   ...deteniendo servicio actual si existe"
+systemctl --user stop battery-assistant 2>/dev/null || true
+ok "Servicio detenido (si existia)"
 
-# --- 4. Instalar en el sistema ---
-echo "📥 Instalando en el sistema..."
-
-# Crear directorio para archivos de audio
 echo "   ...creando directorio de audios (requiere sudo)"
 sudo mkdir -p /usr/share/battery-assistant
+ok "Directorio de audios listo"
 
-# Copiar el ejecutable
 echo "   ...copiando ejecutable (requiere sudo)"
-sudo cp target/release/battery_assistant /usr/local/bin/battery-assistant
-sudo chmod +x /usr/local/bin/battery-assistant
-echo "   ✓ Ejecutable instalado"
+sudo install -m 755 target/release/battery_assistant /usr/local/bin/battery-assistant.new
+sudo mv /usr/local/bin/battery-assistant.new /usr/local/bin/battery-assistant
+ok "Ejecutable instalado"
 
-# Copiar archivos de audio desde assets/
 echo "   ...copiando audios (requiere sudo)"
 sudo cp assets/*.mp3 /usr/share/battery-assistant/
-echo "   ✓ Archivos de audio instalados"
+ok "Archivos de audio instalados"
+step_done
 
-# --- 5. Configurar Systemd User Service ---
-echo "⚙️  Configurando servicio systemd..."
+step "Configurando servicio systemd"
+mkdir -p "$HOME/.config/systemd/user"
+cp battery-assistant.service "$HOME/.config/systemd/user/"
+ok "Archivo de servicio copiado"
+create_default_config_if_missing
+step_done
 
-# Crear directorio de servicios de usuario si no existe
-mkdir -p ~/.config/systemd/user
-
-# Copiar archivo de servicio
-cp battery-assistant.service ~/.config/systemd/user/
-echo "   ✓ Archivo de servicio copiado"
-
-# Recargar daemon de usuario
+step "Recargando daemon de usuario"
 systemctl --user daemon-reload
+ok "Daemon recargado"
+step_done
 
-# Habilitar y arrancar servicio
+step "Habilitando e iniciando servicio"
 systemctl --user enable --now battery-assistant
-echo "   ✓ Servicio habilitado e iniciado"
+ok "Servicio habilitado e iniciado"
+step_done
+
+step "Verificando estado del servicio"
+ok "Instalacion completada"
+step_done
 
 echo ""
-echo "✅ ¡Instalación completada!"
+echo "✅ Instalacion completada"
+echo "⏱ Tiempo total: $((SECONDS - INSTALL_TIMER))s"
 echo ""
 echo "📍 Ejecutable: /usr/local/bin/battery-assistant"
 echo "🔊 Audios: /usr/share/battery-assistant/"
-echo "⚙️  Servicio: ~/.config/systemd/user/battery-assistant.service"
+echo "⚙️  Servicio: $HOME/.config/systemd/user/battery-assistant.service"
 echo ""
 echo "Estado del servicio:"
-systemctl --user status battery-assistant --no-pager | head -n 5
+systemctl --user --no-pager --lines=5 status battery-assistant

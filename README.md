@@ -6,8 +6,9 @@ Asistente de batería para Linux con notificaciones de audio.
 
 - 🔌 Aviso al conectar el cargador
 - 🔋 Aviso al desconectar el cargador  
-- ⚠️ Alerta de batería baja (< 20%)
-- ✅ Aviso de carga completa (> 95%)
+- ⚠️ Alerta de batería baja (<= 20%)
+- ✅ Aviso de carga suficiente (>= 80%)
+- 🧩 Soporte para equipos con múltiples baterías
 - 🚀 Se inicia automáticamente con el sistema
 
 ## 💻 Sistemas compatibles
@@ -25,6 +26,39 @@ cd asistente_bateria
 ```
 
 El instalador verificará e instalará las dependencias automáticamente.
+Muestra progreso por pasos con tiempo por etapa y tiempo total.
+
+Opciones útiles:
+
+```bash
+./install.sh --yes
+./install.sh --yes --skip-rust-install --skip-deps-install
+```
+
+## ⚙️ Configuración opcional
+
+Si quieres cambiar umbrales o tiempo de repetición, edita este archivo:
+
+`~/.config/battery-assistant/config.toml`
+
+```toml
+umbral_baja = 20
+umbral_alta = 80
+cooldown_segundos = 60
+```
+
+- `umbral_baja`: avisa cuando la batería está por debajo o igual a ese porcentaje.
+- `umbral_alta`: avisa cuando la carga está por encima o igual a ese porcentaje.
+- `cooldown_segundos`: tiempo mínimo entre avisos repetidos del mismo tipo.
+
+El instalador crea este archivo automáticamente con valores por defecto.
+Si el archivo tiene valores inválidos, se usan los valores por defecto.
+
+## 📝 Logs
+
+Las advertencias se guardan en:
+
+`~/.local/state/battery-assistant/battery-assistant.log`
 
 ### 🔄 Actualizar
 

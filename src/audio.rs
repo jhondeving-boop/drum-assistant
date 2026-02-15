@@ -1,7 +1,8 @@
+use crate::logger;
 use rodio::{Decoder, OutputStream, Sink};
 use std::fs::File;
 use std::io::BufReader;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::thread;
 
 pub struct AudioPaths {
@@ -45,18 +46,48 @@ impl AudioPaths {
     }
 }
 
-pub fn play_sound(ruta: &PathBuf) {
-    let ruta_archivo = ruta.clone();
+pub fn play_sound(ruta: &Path) {
+    let ruta_archivo = ruta.to_path_buf();
     thread::spawn(move || {
-        if let Ok((_stream, stream_handle)) = OutputStream::try_default() {
-            if let Ok(sink) = Sink::try_new(&stream_handle) {
-                if let Ok(file) = File::open(&ruta_archivo) {
-                    if let Ok(source) = Decoder::new(BufReader::new(file)) {
-                        sink.append(source);
-                        sink.sleep_until_end();
-                    }
-                }
+        let (_stream, stream_handle) = match OutputStream::try_default() {
+            Ok(v) => v,
+            Err(err) => {
+                logger::warn(&format!("No se pudo inicializar salida de audio: {err}"));
+                return;
             }
-        }
+        };
+
+        let sink = match Sink::try_new(&stream_handle) {
+            Ok(s) => s,
+            Err(err) => {
+                logger::warn(&format!("No se pudo crear sink de audio: {err}"));
+                return;
+            }
+        };
+
+        let file = match File::open(&ruta_archivo) {
+            Ok(f) => f,
+            Err(err) => {
+                logger::warn(&format!(
+                    "No se pudo abrir archivo de audio {}: {err}",
+                    ruta_archivo.display()
+                ));
+                return;
+            }
+        };
+
+        let source = match Decoder::new(BufReader::new(file)) {
+            Ok(s) => s,
+            Err(err) => {
+                logger::warn(&format!(
+                    "No se pudo decodificar audio {}: {err}",
+                    ruta_archivo.display()
+                ));
+                return;
+            }
+        };
+
+        sink.append(source);
+        sink.sleep_until_end();
     });
 }

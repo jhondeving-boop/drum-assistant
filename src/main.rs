@@ -1,95 +1,170 @@
+use crate::config::ConfigApp;
+use crate::logger::advertir;
+use crate::monitor::MonitorBateria;
+use battery::Manager;
+use futures_util::stream::StreamExt;
+use std::time::Duration;
+use zbus::Connection;
+use zbus::proxy;
+
 mod audio;
 mod config;
 mod logger;
 mod monitor;
 
-use crate::config::ConfigApp;
-use crate::logger::advertir;
-use crate::monitor::MonitorBateria;
-use battery::Manager;
-use std::thread;
-use std::time::Duration;
+// Proxy para D-Bus UPower
+#[proxy(
+    interface = "org.freedesktop.UPower",
+    default_service = "org.freedesktop.UPower",
+    default_path = "/org/freedesktop/UPower"
+)]
+trait UPower {
+    #[zbus(property)]
+    fn on_battery(&self) -> zbus::Result<bool>;
+}
 
-fn main() -> Result<(), battery::Error> {
-    // Inicializar el gestor de batería, lee de /sys/class/power_supply en Linux
-    let manager = Manager::new()?;
-    // Cargar la configuración desde ~/.config/battery-assistant/config.toml
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Inicializar el gestor de batería
+    let mut manager = match Manager::new() {
+        Ok(m) => m,
+        Err(e) => {
+            advertir(&format!("No se pudo inicializar battery manager: {}", e));
+            return Err(e.into());
+        }
+    };
     let config = ConfigApp::cargar();
 
-    // Almacena el estado interno de cada batería conectada al sistema (normalmente solo 1)
     let mut monitores: Vec<MonitorBateria> = Vec::new();
     let mut aviso_sin_bateria_emitido = false;
 
-    println!("🔊 Asistente de Batería activado (Modo Premium / Bajo Consumo)...");
+    println!("🔊 Asistente de Batería activado (Modo Event-Driven UPower)...");
     println!(
         "Configuración: Baja <= {:.0}%, Alta >= {:.0}%, Repetición cada {}s",
         config.umbral_baja, config.umbral_alta, config.cooldown_segundos
     );
 
+    // Conectar a D-Bus del sistema (System Bus) para escuchar a UPower
+    let conn = match Connection::system().await {
+        Ok(c) => c,
+        Err(e) => {
+            advertir(&format!("No se pudo conectar a D-Bus (System): {}. Fallback al polling.", e));
+            // Si D-Bus falla, usamos el bucle fallback de siempre
+            run_fallback_loop(&mut manager, config, &mut monitores, &mut aviso_sin_bateria_emitido).await;
+            return Ok(());
+        }
+    };
+
+    let upower_proxy = match UPowerProxy::new(&conn).await {
+        Ok(p) => p,
+        Err(e) => {
+            advertir(&format!("No se pudo crear proxy de UPower: {}. Fallback al polling.", e));
+            run_fallback_loop(&mut manager, config, &mut monitores, &mut aviso_sin_bateria_emitido).await;
+            return Ok(());
+        }
+    };
+
+    // Suscribirse a cambios en las propiedades de UPower
+    let mut property_stream = upower_proxy.receive_on_battery_changed().await;
+
+    // Realizar un escaneo inicial al arrancar
+    procesar_baterias(&mut manager, config, &mut monitores, &mut aviso_sin_bateria_emitido);
+
+    // Bucle principal híbrido (Event-Driven + Polling Lento)
     loop {
-        // Asignamos un tiempo por defecto seguro en caso de error,
-        // pero luego calcularemos dinámicamente el menor tiempo de espera.
-        let mut sleep_duration = Duration::from_secs(30);
+        // En cada iteración procesamos las baterías
+        let sleep_duration = procesar_baterias(&mut manager, config, &mut monitores, &mut aviso_sin_bateria_emitido);
 
-        match manager.batteries() {
-            Ok(baterias) => {
-                let mut ok_index = 0usize;
-
-                for battery_result in baterias {
-                    match battery_result {
-                        Ok(bateria) => {
-                            // Inicializa el monitor si es nuevo o procesa el ciclo si ya existe
-                            asegurar_monitor_en_indice(&mut monitores, ok_index, config, &bateria);
-
-                            // Obtenemos el tiempo recomendado de sleep para esta batería
-                            // (si está cerca de un umbral, pedirá despertar en 5s en lugar de 30s)
-                            let current_sleep =
-                                monitores[ok_index].tiempo_espera_dinamico(&bateria);
-                            if current_sleep < sleep_duration {
-                                sleep_duration = current_sleep;
-                            }
-
-                            ok_index += 1;
-                        }
-                        Err(err) => {
-                            advertir(&format!(
-                                "No se pudo leer el estado de una bateria: {}",
-                                err
-                            ));
-                        }
-                    }
-                }
-
-                // Limpiar monitores de baterías que fueron desconectadas físicamente
-                recortar_monitores_activos(&mut monitores, ok_index);
-
-                // Advertir solo una vez si el equipo es de escritorio (no tiene batería)
-                if ok_index == 0 {
-                    if !aviso_sin_bateria_emitido {
-                        advertir("No se detectaron baterías en el sistema.");
-                        aviso_sin_bateria_emitido = true;
-                    }
-                } else {
-                    aviso_sin_bateria_emitido = false;
-                }
+        // Dormimos, pero podemos ser "despertados" instantáneamente por D-Bus si conectas el cable
+        tokio::select! {
+            _ = tokio::time::sleep(sleep_duration) => {
+                // Despertó por tiempo (polling para revisar si la batería bajó/subió de %, sin conectar cable)
+                // El siguiente ciclo se encargará de procesarlo.
             }
-            Err(err) => {
-                advertir(&format!(
-                    "No se pudo enumerar las baterías del sistema: {}",
-                    err
-                ));
+            evento_dbus = property_stream.next() => {
+                if evento_dbus.is_some() {
+                    // Despertó instantáneamente porque UPower detectó conexión/desconexión física del cable
+                    // El siguiente ciclo procesará el cambio en ~1ms
+                    tokio::time::sleep(Duration::from_millis(500)).await; // Esperamos 500ms a que sysfs se actualice
+                } else {
+                    // El stream de D-Bus se cerró (muy raro)
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
             }
         }
-
-        // Feature: Polling Dinámico
-        // En lugar de despertar la CPU cada 5 segundos ciegamente, dormimos según las necesidades
-        // reales del estado de la batería (5s cerca del peligro, 30s en estado seguro).
-        thread::sleep(sleep_duration);
     }
 }
 
-/// Garantiza que exista un `MonitorBateria` inicializado para el índice actual,
-/// y ejecuta el ciclo de validación de umbrales.
+/// Fallback si D-Bus o UPower no están disponibles (como BSD u otros sistemas)
+async fn run_fallback_loop(
+    manager: &mut Manager,
+    config: ConfigApp,
+    monitores: &mut Vec<MonitorBateria>,
+    aviso_sin_bateria_emitido: &mut bool,
+) {
+    loop {
+        let sleep_duration = procesar_baterias(manager, config, monitores, aviso_sin_bateria_emitido);
+        tokio::time::sleep(sleep_duration).await;
+    }
+}
+
+/// Lógica extraída de lectura y evaluación de estado. Retorna el tiempo que debería dormir.
+fn procesar_baterias(
+    manager: &mut Manager,
+    config: ConfigApp,
+    monitores: &mut Vec<MonitorBateria>,
+    aviso_sin_bateria_emitido: &mut bool,
+) -> Duration {
+    // Para asegurarse de obtener datos frescos, a veces es necesario refrescar el manager entero
+    // en algunas combinaciones de kernel/battery crate, pero probaremos iterando normal.
+    let mut sleep_duration = Duration::from_secs(30);
+    
+    // Forzamos refresh al manager creándolo de nuevo para evitar caché de sysfs
+    if let Ok(new_manager) = Manager::new() {
+        *manager = new_manager;
+    }
+
+    match manager.batteries() {
+        Ok(baterias) => {
+            let mut ok_index = 0usize;
+
+            for battery_result in baterias {
+                match battery_result {
+                    Ok(bateria) => {
+                        asegurar_monitor_en_indice(monitores, ok_index, config, &bateria);
+
+                        let current_sleep = monitores[ok_index].tiempo_espera_dinamico(&bateria);
+                        if current_sleep < sleep_duration {
+                            sleep_duration = current_sleep;
+                        }
+
+                        ok_index += 1;
+                    }
+                    Err(err) => {
+                        advertir(&format!("No se pudo leer el estado de una bateria: {}", err));
+                    }
+                }
+            }
+
+            recortar_monitores_activos(monitores, ok_index);
+
+            if ok_index == 0 {
+                if !*aviso_sin_bateria_emitido {
+                    advertir("No se detectaron baterías en el sistema.");
+                    *aviso_sin_bateria_emitido = true;
+                }
+            } else {
+                *aviso_sin_bateria_emitido = false;
+            }
+        }
+        Err(err) => {
+            advertir(&format!("No se pudo enumerar las baterías del sistema: {}", err));
+        }
+    }
+
+    sleep_duration
+}
+
 fn asegurar_monitor_en_indice(
     monitores: &mut Vec<MonitorBateria>,
     index: usize,
@@ -105,7 +180,6 @@ fn asegurar_monitor_en_indice(
     }
 }
 
-/// Remueve del Vector los monitores de baterías que ya no están presentes (ej. baterías extraíbles).
 fn recortar_monitores_activos<T>(items: &mut Vec<T>, active_count: usize) {
     if items.len() > active_count {
         items.truncate(active_count);

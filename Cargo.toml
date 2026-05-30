@@ -10,6 +10,9 @@ keywords = ["battery", "linux", "notification", "audio"]
 categories = ["command-line-utilities"]
 
 [dependencies]
+zbus = "5.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+futures-util = "0.3"
 battery = "0.7"
 notify-rust = "4"
 rodio = { version = "0.19", default-features = false, features = ["minimp3"] }

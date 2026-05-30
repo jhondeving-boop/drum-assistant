@@ -70,22 +70,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Realizar un escaneo inicial al arrancar
     procesar_baterias(&mut manager, config, &mut monitores, &mut aviso_sin_bateria_emitido);
 
+    let mut fast_poll_ticks = 0;
+
     // Bucle principal híbrido (Event-Driven + Polling Lento)
     loop {
         // En cada iteración procesamos las baterías
-        let sleep_duration = procesar_baterias(&mut manager, config, &mut monitores, &mut aviso_sin_bateria_emitido);
+        let mut sleep_duration = procesar_baterias(&mut manager, config, &mut monitores, &mut aviso_sin_bateria_emitido);
+
+        // Si estamos en modo ráfaga tras un evento D-Bus, reducimos drásticamente la espera
+        if fast_poll_ticks > 0 {
+            sleep_duration = Duration::from_millis(400); // 400ms para latencia casi imperceptible
+            fast_poll_ticks -= 1;
+        }
 
         // Dormimos, pero podemos ser "despertados" instantáneamente por D-Bus si conectas el cable
         tokio::select! {
             _ = tokio::time::sleep(sleep_duration) => {
-                // Despertó por tiempo (polling para revisar si la batería bajó/subió de %, sin conectar cable)
-                // El siguiente ciclo se encargará de procesarlo.
+                // Despertó por tiempo (polling)
             }
             evento_dbus = property_stream.next() => {
                 if evento_dbus.is_some() {
-                    // Despertó instantáneamente porque UPower detectó conexión/desconexión física del cable
-                    // El siguiente ciclo procesará el cambio en ~1ms
-                    tokio::time::sleep(Duration::from_millis(500)).await; // Esperamos 500ms a que sysfs se actualice
+                    // Despertó instantáneamente porque UPower detectó el cable.
+                    // Activamos una ráfaga de lecturas rápidas para atrapar el momento exacto
+                    // en que `sysfs` (el sistema de archivos de batería de Linux) se actualiza.
+                    fast_poll_ticks = 10; // 10 * 400ms = 4 segundos de ráfaga
                 } else {
                     // El stream de D-Bus se cerró (muy raro)
                     tokio::time::sleep(Duration::from_secs(5)).await;

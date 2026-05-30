@@ -34,6 +34,15 @@ impl MonitorBateria {
         self.estado_anterior = bateria.state();
         let porcentaje = bateria.state_of_charge().get::<percent>();
 
+        // Si el estado al arrancar es Unknown, intentamos forzar a lo que sea más lógico basado en la batería
+        if self.estado_anterior == State::Unknown {
+            if bateria.time_to_full().is_some() {
+                self.estado_anterior = State::Charging;
+            } else if bateria.time_to_empty().is_some() {
+                self.estado_anterior = State::Discharging;
+            }
+        }
+
         // Si arrancamos en estado crítico, marcamos como "ya avisado" para esperar al cooldown
         if porcentaje <= self.umbral_baja {
             self.ultimo_aviso_baja = Some(Instant::now());

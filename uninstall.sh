@@ -19,9 +19,9 @@ echo "🗑️  Eliminando archivos del sistema (requiere sudo)..."
 sudo rm -f /usr/local/bin/battery-assistant
 echo "   ✓ Ejecutable eliminado"
 
-# Eliminar audios
+# Eliminar audios legacy (por si existían en una versión anterior)
 sudo rm -rf /usr/share/battery-assistant
-echo "   ✓ Archivos de audio eliminados"
+echo "   ✓ Recursos compartidos (legacy) eliminados"
 
 # Eliminar autostart (legacy)
 rm -f ~/.config/autostart/battery-assistant.desktop

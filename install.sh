@@ -193,18 +193,10 @@ echo "   ...deteniendo servicio actual si existe"
 systemctl --user stop battery-assistant 2>/dev/null || true
 ok "Servicio detenido (si existia)"
 
-echo "   ...creando directorio de audios (requiere sudo)"
-sudo mkdir -p /usr/share/battery-assistant
-ok "Directorio de audios listo"
-
 echo "   ...copiando ejecutable (requiere sudo)"
 sudo install -m 755 target/release/battery_assistant /usr/local/bin/battery-assistant.new
 sudo mv /usr/local/bin/battery-assistant.new /usr/local/bin/battery-assistant
 ok "Ejecutable instalado"
-
-echo "   ...copiando audios (requiere sudo)"
-sudo cp assets/*.mp3 /usr/share/battery-assistant/
-ok "Archivos de audio instalados"
 paso_completado
 
 paso "Configurando servicio systemd"
@@ -233,7 +225,6 @@ echo "✅ Instalacion completada"
 echo "⏱ Tiempo total: $((SECONDS - INSTALL_TIMER))s"
 echo ""
 echo "📍 Ejecutable: /usr/local/bin/battery-assistant"
-echo "🔊 Audios: /usr/share/battery-assistant/"
 echo "⚙️  Servicio: $HOME/.config/systemd/user/battery-assistant.service"
 echo ""
 echo "Estado del servicio:"

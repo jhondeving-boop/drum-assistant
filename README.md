@@ -1,44 +1,48 @@
 # 🔋 Battery Assistant
 
-Asistente de batería para Linux con notificaciones de audio.
+Un asistente de batería para Linux ultraligero y de alto rendimiento, escrito en Rust, con notificaciones de audio, tiempo restante estimado y soporte para systemd.
 
-## ✨ Características
+## ✨ Características Premium
 
-- 🔌 Aviso al conectar el cargador
-- 🔋 Aviso al desconectar el cargador  
-- ⚠️ Alerta de batería baja (<= 20%)
-- ✅ Aviso de carga suficiente (>= 80%)
-- 🧩 Soporte para equipos con múltiples baterías
-- 🚀 Se inicia automáticamente con el sistema
+- **Cero I/O de disco:** Todos los recursos de audio (`.mp3`) están incrustados directamente en memoria.
+- **CPU Dinámica Adaptativa:** Usa literalmente ~0.0% de CPU en reposo gracias al polling dinámico.
+- **Predicción de Autonomía:** Muestra el tiempo estimado en minutos al alcanzar umbrales críticos.
+- 🔌 Aviso por voz al conectar el cargador
+- 🔋 Aviso por voz al desconectar el cargador
+- ⚠️ Alerta de batería crítica (<= 20% configurable)
+- ✅ Aviso de carga completada (>= 80% configurable para cuidar la vida útil)
+- 🧩 Soporte nativo para notificaciones de escritorio
 
 ## 💻 Sistemas compatibles
 
+Cualquier distribución Linux que soporte `systemd` y `notify-send` (PipeWire o PulseAudio):
 - Arch Linux / Manjaro / EndeavourOS
-- Debian / Ubuntu / Linux Mint
+- Debian / Ubuntu / Pop!_OS
 - Fedora / RHEL
 
-## 📦 Instalación
+## 📦 Instalación Fácil
+
+Puedes usar nuestro instalador automático que se encarga de todo el proceso en un solo comando:
 
 ```bash
 git clone https://github.com/jhondeving-boop/asistente_bateria.git
 cd asistente_bateria
+
+# Ejecuta el instalador interactivo
 ./install.sh
 ```
 
-El instalador verificará e instalará las dependencias automáticamente.
-Muestra progreso por pasos con tiempo por etapa y tiempo total.
+El instalador verificará e instalará las dependencias (como `alsa-lib` y `Rust` si es necesario), compilará la versión optimizada (`release`) y configurará el servicio en `systemd`.
 
-Opciones útiles:
-
+### Instalación Rápida / Desatendida
+Si quieres que el instalador acepte todas las opciones automáticamente (ideal para scripts):
 ```bash
 ./install.sh --yes
-./install.sh --yes --skip-rust-install --skip-deps-install
 ```
 
-## ⚙️ Configuración opcional
+## ⚙️ Configuración
 
-Si quieres cambiar umbrales o tiempo de repetición, edita este archivo:
-
+Puedes personalizar el comportamiento en cualquier momento editando este archivo:
 `~/.config/battery-assistant/config.toml`
 
 ```toml
@@ -47,34 +51,24 @@ umbral_alta = 80
 cooldown_segundos = 60
 ```
 
-- `umbral_baja`: avisa cuando la batería está por debajo o igual a ese porcentaje.
-- `umbral_alta`: avisa cuando la carga está por encima o igual a ese porcentaje.
-- `cooldown_segundos`: tiempo mínimo entre avisos repetidos del mismo tipo.
+- **`umbral_baja`**: Avisa cuando la batería está por debajo o igual a este porcentaje.
+- **`umbral_alta`**: Avisa para desconectar y cuidar la batería.
+- **`cooldown_segundos`**: Tiempo mínimo (en segundos) para no hacer "spam" de la misma alerta si sigues ignorándola.
 
-El instalador crea este archivo automáticamente con valores por defecto.
-Si el archivo tiene valores inválidos, se usan los valores por defecto.
+*Los cambios se aplican reiniciando el servicio (`systemctl --user restart battery-assistant`).*
 
-## 📝 Logs
+## 🗑️ Desinstalación
 
-Las advertencias se guardan en:
-
-`~/.local/state/battery-assistant/battery-assistant.log`
-
-### 🔄 Actualizar
-
-Simplemente descarga los cambios y ejecuta el instalador de nuevo (reemplazará el ejecutable automáticamente):
+Desinstalar el asistente es igual de fácil. Hemos incluido un script que elimina todo rastro del programa:
 
 ```bash
-git pull
-./install.sh
+./uninstall.sh
 ```
 
-## 🗑️ Desinstalar
+## 🔄 Cómo actualizar
 
-```bash
-sudo ./uninstall.sh
-```
+Si en el futuro descargas una versión más reciente con `git pull`, solo vuelve a correr el comando `./install.sh`. Se encargará de detener el servicio viejo, recompilar la aplicación más reciente y volver a arrancar sin que tú tengas que tocar nada más.
 
 ## 📄 Licencia
 
-MIT
+MIT License

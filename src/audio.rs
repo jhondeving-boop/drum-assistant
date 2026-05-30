@@ -1,58 +1,41 @@
 use crate::logger;
 use rodio::{Decoder, OutputStream, Sink};
-use std::fs::File;
-use std::io::BufReader;
-use std::path::{Path, PathBuf};
+use std::io::Cursor;
 use std::thread;
 
-pub struct RutasAudio {
-    pub conectado: PathBuf,
-    pub desconectado: PathBuf,
-    pub baja: PathBuf,
-    pub cargada: PathBuf,
+/// Definimos los posibles eventos de audio que el sistema puede emitir.
+pub enum EventoAudio {
+    Conectado,
+    Desconectado,
+    BateriaBaja,
+    BateriaCargada,
 }
 
-impl RutasAudio {
-    pub fn new() -> Self {
-        // Orden de prioridad:
-        // 1. /usr/share (Sistema Instalado)
-        // 2. assets/ (Desarrollo)
-        // 3. Junto al ejecutable (Portable)
-        let system_path = PathBuf::from("/usr/share/battery-assistant");
-        let current_dir = std::env::current_dir().unwrap_or_default();
-        let assets_dir = current_dir.join("assets");
-        let exe_dir = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-            .unwrap_or_default();
+/// Embebemos los archivos de audio en el binario compilado.
+/// Esto elimina por completo el I/O de disco (0% uso de disco) al momento de reproducir alertas,
+/// mejorando radicalmente la latencia y previniendo fallos si los archivos son movidos.
+const AUDIO_CONECTADO: &[u8] = include_bytes!("../assets/conectado.mp3");
+const AUDIO_DESCONECTADO: &[u8] = include_bytes!("../assets/desconectado.mp3");
+const AUDIO_BAJA: &[u8] = include_bytes!("../assets/baja.mp3");
+const AUDIO_CARGADA: &[u8] = include_bytes!("../assets/cargada.mp3");
 
-        // Determinar la base buscando un archivo clave
-        let base = if system_path.join("conectado.mp3").exists() {
-            system_path
-        } else if assets_dir.join("conectado.mp3").exists() {
-            assets_dir
-        } else if exe_dir.join("conectado.mp3").exists() {
-            exe_dir
-        } else {
-            current_dir
-        };
+/// Reproduce un sonido basado en el evento, procesado totalmente en memoria (RAM).
+pub fn reproducir_sonido(evento: EventoAudio) {
+    // Seleccionamos los bytes correctos según el evento
+    let bytes_audio = match evento {
+        EventoAudio::Conectado => AUDIO_CONECTADO,
+        EventoAudio::Desconectado => AUDIO_DESCONECTADO,
+        EventoAudio::BateriaBaja => AUDIO_BAJA,
+        EventoAudio::BateriaCargada => AUDIO_CARGADA,
+    };
 
-        Self {
-            conectado: base.join("conectado.mp3"),
-            desconectado: base.join("desconectado.mp3"),
-            baja: base.join("baja.mp3"),
-            cargada: base.join("cargada.mp3"),
-        }
-    }
-}
-
-pub fn reproducir_sonido(ruta: &Path) {
-    let ruta_archivo = ruta.to_path_buf();
+    // Lanzamos un hilo ligero para no bloquear la ejecución del monitor principal
     thread::spawn(move || {
+        // Inicializamos la salida de audio del sistema (PipeWire / PulseAudio / ALSA)
         let (_stream, stream_handle) = match OutputStream::try_default() {
             Ok(v) => v,
             Err(err) => {
-                logger::advertir(&format!("No se pudo inicializar salida de audio: {err}"));
+                logger::advertir(&format!("No se pudo inicializar salida de audio: {}", err));
                 return;
             }
         };
@@ -60,34 +43,27 @@ pub fn reproducir_sonido(ruta: &Path) {
         let sink = match Sink::try_new(&stream_handle) {
             Ok(s) => s,
             Err(err) => {
-                logger::advertir(&format!("No se pudo crear sink de audio: {err}"));
+                logger::advertir(&format!("No se pudo crear sink de audio: {}", err));
                 return;
             }
         };
 
-        let file = match File::open(&ruta_archivo) {
-            Ok(f) => f,
-            Err(err) => {
-                logger::advertir(&format!(
-                    "No se pudo abrir archivo de audio {}: {err}",
-                    ruta_archivo.display()
-                ));
-                return;
-            }
-        };
+        // Envolvemos los bytes estáticos en un Cursor, que simula un archivo pero en memoria RAM
+        let cursor = Cursor::new(bytes_audio);
 
-        let source = match Decoder::new(BufReader::new(file)) {
+        let source = match Decoder::new(cursor) {
             Ok(s) => s,
             Err(err) => {
                 logger::advertir(&format!(
-                    "No se pudo decodificar audio {}: {err}",
-                    ruta_archivo.display()
+                    "No se pudo decodificar el audio en memoria: {}",
+                    err
                 ));
                 return;
             }
         };
 
         sink.append(source);
+        // El hilo espera hasta que el sonido termine de reproducirse antes de morir
         sink.sleep_until_end();
     });
 }

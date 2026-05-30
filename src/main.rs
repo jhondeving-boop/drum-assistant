@@ -11,18 +11,26 @@ use std::thread;
 use std::time::Duration;
 
 fn main() -> Result<(), battery::Error> {
+    // Inicializar el gestor de batería, lee de /sys/class/power_supply en Linux
     let manager = Manager::new()?;
+    // Cargar la configuración desde ~/.config/battery-assistant/config.toml
     let config = ConfigApp::cargar();
+
+    // Almacena el estado interno de cada batería conectada al sistema (normalmente solo 1)
     let mut monitores: Vec<MonitorBateria> = Vec::new();
     let mut aviso_sin_bateria_emitido = false;
 
-    println!("🔊 Asistente de batería activado...");
+    println!("🔊 Asistente de Batería activado (Modo Premium / Bajo Consumo)...");
     println!(
-        "Configuracion: baja <= {:.0}%, alta >= {:.0}%, repeticion cada {}s",
+        "Configuración: Baja <= {:.0}%, Alta >= {:.0}%, Repetición cada {}s",
         config.umbral_baja, config.umbral_alta, config.cooldown_segundos
     );
 
     loop {
+        // Asignamos un tiempo por defecto seguro en caso de error,
+        // pero luego calcularemos dinámicamente el menor tiempo de espera.
+        let mut sleep_duration = Duration::from_secs(30);
+
         match manager.batteries() {
             Ok(baterias) => {
                 let mut ok_index = 0usize;
@@ -30,20 +38,35 @@ fn main() -> Result<(), battery::Error> {
                 for battery_result in baterias {
                     match battery_result {
                         Ok(bateria) => {
+                            // Inicializa el monitor si es nuevo o procesa el ciclo si ya existe
                             asegurar_monitor_en_indice(&mut monitores, ok_index, config, &bateria);
+
+                            // Obtenemos el tiempo recomendado de sleep para esta batería
+                            // (si está cerca de un umbral, pedirá despertar en 5s en lugar de 30s)
+                            let current_sleep =
+                                monitores[ok_index].tiempo_espera_dinamico(&bateria);
+                            if current_sleep < sleep_duration {
+                                sleep_duration = current_sleep;
+                            }
+
                             ok_index += 1;
                         }
                         Err(err) => {
-                            advertir(&format!("No se pudo leer el estado de una bateria: {err}"));
+                            advertir(&format!(
+                                "No se pudo leer el estado de una bateria: {}",
+                                err
+                            ));
                         }
                     }
                 }
 
+                // Limpiar monitores de baterías que fueron desconectadas físicamente
                 recortar_monitores_activos(&mut monitores, ok_index);
 
+                // Advertir solo una vez si el equipo es de escritorio (no tiene batería)
                 if ok_index == 0 {
                     if !aviso_sin_bateria_emitido {
-                        advertir("No se detectaron baterias en el sistema.");
+                        advertir("No se detectaron baterías en el sistema.");
                         aviso_sin_bateria_emitido = true;
                     }
                 } else {
@@ -51,15 +74,22 @@ fn main() -> Result<(), battery::Error> {
                 }
             }
             Err(err) => {
-                advertir(&format!("No se pudo enumerar baterias del sistema: {err}"));
+                advertir(&format!(
+                    "No se pudo enumerar las baterías del sistema: {}",
+                    err
+                ));
             }
         }
 
-        // Revisamos cada 5 segundos (eficiente en CPU)
-        thread::sleep(Duration::from_secs(5));
+        // Feature: Polling Dinámico
+        // En lugar de despertar la CPU cada 5 segundos ciegamente, dormimos según las necesidades
+        // reales del estado de la batería (5s cerca del peligro, 30s en estado seguro).
+        thread::sleep(sleep_duration);
     }
 }
 
+/// Garantiza que exista un `MonitorBateria` inicializado para el índice actual,
+/// y ejecuta el ciclo de validación de umbrales.
 fn asegurar_monitor_en_indice(
     monitores: &mut Vec<MonitorBateria>,
     index: usize,
@@ -75,6 +105,7 @@ fn asegurar_monitor_en_indice(
     }
 }
 
+/// Remueve del Vector los monitores de baterías que ya no están presentes (ej. baterías extraíbles).
 fn recortar_monitores_activos<T>(items: &mut Vec<T>, active_count: usize) {
     if items.len() > active_count {
         items.truncate(active_count);

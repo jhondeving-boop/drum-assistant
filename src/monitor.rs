@@ -49,8 +49,9 @@ impl MonitorBateria {
         let porcentaje = bateria.state_of_charge().get::<percent>();
         let mut hubo_evento_prioritario = false;
 
-        // 1. Verificar cambio de estado (Conexión / Desconexión del cargador)
-        if estado_actual != self.estado_anterior {
+        // Ignorar el estado 'Unknown' si ya teníamos un estado válido. 
+        // Esto evita que el programa se confunda si el Kernel de Linux parpadea la lectura 1 milisegundo.
+        if estado_actual != State::Unknown && estado_actual != self.estado_anterior {
             hubo_evento_prioritario = self.manejar_cambio_estado(estado_actual);
             self.estado_anterior = estado_actual;
         }
@@ -80,10 +81,14 @@ impl MonitorBateria {
     fn manejar_cambio_estado(&mut self, estado: State) -> bool {
         match estado {
             State::Charging => {
-                println!("🔌 Cargador Conectado");
-                Self::notificar("Energía", "Cargador conectado al sistema", Urgency::Normal);
-                reproducir_sonido(EventoAudio::Conectado);
-                self.ultimo_aviso_baja = None; // Reseteamos la alerta de batería baja
+                // Solo anunciamos que se conectó si antes estaba descargándose o al inicio (Unknown)
+                // Evitamos avisar si solo bajó de "Full" (100%) a "Charging" (99%) mientras sigue conectado.
+                if self.estado_anterior == State::Discharging || self.estado_anterior == State::Unknown {
+                    println!("🔌 Cargador Conectado");
+                    Self::notificar("Energía", "Cargador conectado al sistema", Urgency::Normal);
+                    reproducir_sonido(EventoAudio::Conectado);
+                }
+                self.ultimo_aviso_baja = None; // Siempre reseteamos la alerta de batería baja
                 true
             }
             State::Discharging if self.estado_anterior == State::Charging || self.estado_anterior == State::Full => {

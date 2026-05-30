@@ -3,6 +3,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const MAX_LOG_SIZE_BYTES: u64 = 5 * 1024 * 1024; // 5 MB
+
 pub fn advertir(mensaje: &str) {
     eprintln!("WARN: {mensaje}");
 
@@ -14,7 +16,20 @@ pub fn advertir(mensaje: &str) {
         let _ = fs::create_dir_all(carpeta);
     }
 
-    if let Ok(mut archivo) = OpenOptions::new().create(true).append(true).open(&ruta) {
+    // Rotación básica: Si el archivo es mayor a 5MB, lo truncamos (borramos el contenido viejo)
+    let truncate = if let Ok(metadata) = fs::metadata(&ruta) {
+        metadata.len() > MAX_LOG_SIZE_BYTES
+    } else {
+        false
+    };
+
+    if let Ok(mut archivo) = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(!truncate)
+        .truncate(truncate)
+        .open(&ruta)
+    {
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())

@@ -1,11 +1,13 @@
-use crate::audio::{RutasAudio, reproducir_sonido};
+use crate::audio::{EventoAudio, reproducir_sonido};
 use crate::config::ConfigApp;
 use crate::logger;
 use battery::units::ratio::percent;
+use battery::units::time::minute;
 use battery::{Battery, State};
-use notify_rust::Notification;
+use notify_rust::{Notification, Timeout, Urgency};
 use std::time::{Duration, Instant};
 
+/// Gestiona el estado y las alertas para una batería específica
 pub struct MonitorBateria {
     estado_anterior: State,
     ultimo_aviso_baja: Option<Instant>,
@@ -13,7 +15,6 @@ pub struct MonitorBateria {
     umbral_baja: f32,
     umbral_alta: f32,
     cooldown: Duration,
-    rutas_audio: RutasAudio,
 }
 
 impl MonitorBateria {
@@ -25,7 +26,6 @@ impl MonitorBateria {
             umbral_baja: config.umbral_baja,
             umbral_alta: config.umbral_alta,
             cooldown: Duration::from_secs(config.cooldown_segundos),
-            rutas_audio: RutasAudio::new(),
         }
     }
 
@@ -34,7 +34,7 @@ impl MonitorBateria {
         self.estado_anterior = bateria.state();
         let porcentaje = bateria.state_of_charge().get::<percent>();
 
-        // Si arrancamos en estado crítico, marcamos como "ya avisado" para esperar 1 min
+        // Si arrancamos en estado crítico, marcamos como "ya avisado" para esperar al cooldown
         if porcentaje <= self.umbral_baja {
             self.ultimo_aviso_baja = Some(Instant::now());
         }
@@ -49,70 +49,102 @@ impl MonitorBateria {
         let porcentaje = bateria.state_of_charge().get::<percent>();
         let mut hubo_evento_prioritario = false;
 
-        // 1. Verificar cambio de cable (Prioridad Alta)
+        // 1. Verificar cambio de estado (Conexión / Desconexión del cargador)
         if estado_actual != self.estado_anterior {
             hubo_evento_prioritario = self.manejar_cambio_estado(estado_actual);
             self.estado_anterior = estado_actual;
         }
 
-        // 2. Verificar niveles (solo si no hubo cambio de cable reciente para evitar choques)
+        // 2. Verificar niveles (solo si no hubo cambio reciente para evitar cruces de notificaciones)
         if !hubo_evento_prioritario {
-            self.verificar_niveles(estado_actual, porcentaje);
+            self.verificar_niveles(bateria, estado_actual, porcentaje);
         }
     }
 
-    /// Maneja la conexión/desconexión del cargador
+    /// Calcula el tiempo dinámico para dormir el hilo y ahorrar CPU
+    /// Si está lejos de los umbrales, duerme más tiempo. Si está cerca, despierta más rápido.
+    pub fn tiempo_espera_dinamico(&self, bateria: &Battery) -> Duration {
+        let porcentaje = bateria.state_of_charge().get::<percent>();
+
+        // Si la batería está en rango de alerta o muy cerca (a 3% de los límites),
+        // revisamos cada 5 segundos para precisión exacta.
+        if (porcentaje <= self.umbral_baja + 3.0) || (porcentaje >= self.umbral_alta - 3.0) {
+            Duration::from_secs(5)
+        } else {
+            // Zona segura (ej: entre 25% y 75%). Dormimos 30 segundos ahorrando ciclos de CPU.
+            Duration::from_secs(30)
+        }
+    }
+
+    /// Maneja la conexión/desconexión del cargador (Alta prioridad)
     fn manejar_cambio_estado(&mut self, estado: State) -> bool {
         match estado {
             State::Charging => {
                 println!("🔌 Cargador Conectado");
-                Self::notificar("Energía", "Cargador conectado");
-                reproducir_sonido(&self.rutas_audio.conectado);
-                self.ultimo_aviso_baja = None; // Reset alerta baja
+                Self::notificar("Energía", "Cargador conectado al sistema", Urgency::Normal);
+                reproducir_sonido(EventoAudio::Conectado);
+                self.ultimo_aviso_baja = None; // Reseteamos la alerta de batería baja
                 true
             }
-            State::Discharging => {
-                // Solo notificar si antes estaba cargando (ignorar parpadeos o unknown)
-                if self.estado_anterior == State::Charging || self.estado_anterior == State::Full {
-                    println!("🔋 Cargador Desconectado");
-                    Self::notificar("Energía", "Usando batería");
-                    reproducir_sonido(&self.rutas_audio.desconectado);
-                    self.ultimo_aviso_cargada = None; // Reset alerta cargada
-                    true
-                } else {
-                    false
-                }
+            State::Discharging if self.estado_anterior == State::Charging || self.estado_anterior == State::Full => {
+                // Solo notificar si antes estaba cargando/lleno (ignorar lecturas erróneas 'Unknown')
+                println!("🔋 Cargador Desconectado");
+                Self::notificar("Energía", "Usando energía de la batería", Urgency::Normal);
+                reproducir_sonido(EventoAudio::Desconectado);
+                self.ultimo_aviso_cargada = None; // Reseteamos la alerta de carga alta
+                true
             }
             _ => false,
         }
     }
 
-    /// Verifica si se deben emitir alertas de nivel
-    fn verificar_niveles(&mut self, estado: State, porcentaje: f32) {
+    /// Verifica si se deben emitir alertas de nivel e incorpora inteligencia (tiempo restante)
+    fn verificar_niveles(&mut self, bateria: &Battery, estado: State, porcentaje: f32) {
         // A. Bateria Baja
         if debe_alertar_baja(estado, porcentaje, self.umbral_baja) {
             if self.debe_avisar(self.ultimo_aviso_baja) {
-                println!("⚠️ Batería Crítica ({:.0}%)", porcentaje);
-                Self::notificar(
-                    "Batería Baja",
-                    &format!("Nivel crítico: {:.0}%. Conecta el cargador.", porcentaje),
+                // Feature Premium: Estimar tiempo restante
+                let tiempo_texto = match bateria.time_to_empty() {
+                    Some(tiempo) => format!(
+                        " Tiempo estimado restante: {:.0} min.",
+                        tiempo.get::<minute>()
+                    ),
+                    None => String::new(),
+                };
+
+                let mensaje = format!(
+                    "Nivel crítico: {:.0}%. Conecta el cargador.{}",
+                    porcentaje, tiempo_texto
                 );
-                reproducir_sonido(&self.rutas_audio.baja);
+                println!("⚠️ Batería Crítica ({:.0}%)", porcentaje);
+                Self::notificar("Batería Baja", &mensaje, Urgency::Critical);
+                reproducir_sonido(EventoAudio::BateriaBaja);
+
                 self.ultimo_aviso_baja = Some(Instant::now());
             }
         } else if estado == State::Charging {
-            self.ultimo_aviso_baja = None;
+            self.ultimo_aviso_baja = None; // Si enchufó pero sigue en rango bajo, cancelamos alertas
         }
 
         // B. Carga Alta
         if debe_alertar_alta(estado, porcentaje, self.umbral_alta) {
             if self.debe_avisar(self.ultimo_aviso_cargada) {
-                println!("✅ Carga Suficiente ({:.0}%)", porcentaje);
-                Self::notificar(
-                    "Carga Suficiente",
-                    &format!("Nivel: {:.0}%. Desconecta el cargador.", porcentaje),
+                // Feature Premium: Estimar tiempo para carga completa
+                let tiempo_texto = match bateria.time_to_full() {
+                    Some(tiempo) if tiempo.get::<minute>() > 0.0 => {
+                        format!(" Faltan {:.0} min para el 100%.", tiempo.get::<minute>())
+                    }
+                    _ => String::new(),
+                };
+
+                let mensaje = format!(
+                    "Nivel alcanzado: {:.0}%. Desconecta el cargador para cuidar la vida útil.{}",
+                    porcentaje, tiempo_texto
                 );
-                reproducir_sonido(&self.rutas_audio.cargada);
+                println!("✅ Carga Suficiente ({:.0}%)", porcentaje);
+                Self::notificar("Carga Suficiente", &mensaje, Urgency::Normal);
+                reproducir_sonido(EventoAudio::BateriaCargada);
+
                 self.ultimo_aviso_cargada = Some(Instant::now());
             }
         } else if estado == State::Discharging {
@@ -120,21 +152,32 @@ impl MonitorBateria {
         }
     }
 
+    /// Comprueba si ha pasado el tiempo de gracia (cooldown) desde el último aviso
     fn debe_avisar(&self, ultimo_aviso: Option<Instant>) -> bool {
         cooldown_vencido(ultimo_aviso, Instant::now(), self.cooldown)
     }
 
-    fn notificar(titulo: &str, cuerpo: &str) {
-        if let Err(err) = Notification::new()
+    /// Envia notificación de escritorio
+    fn notificar(titulo: &str, cuerpo: &str, urgencia: Urgency) {
+        let mut notif = Notification::new();
+        notif
             .summary(titulo)
             .body(cuerpo)
-            .icon("battery")
-            .show()
-        {
-            logger::advertir(&format!("No se pudo mostrar notificacion: {err}"));
+            .icon("battery") // Intenta usar icono nativo del sistema
+            .urgency(urgencia);
+
+        // Si es crítica (Hyprland / Mako), forzamos que no desaparezca sola
+        if urgencia == Urgency::Critical {
+            notif.timeout(Timeout::Never);
+        }
+
+        if let Err(err) = notif.show() {
+            logger::advertir(&format!("No se pudo mostrar la notificación: {}", err));
         }
     }
 }
+
+// --- Funciones auxiliares puras (fáciles de testear) ---
 
 fn cooldown_vencido(ultimo_aviso: Option<Instant>, ahora: Instant, cooldown: Duration) -> bool {
     match ultimo_aviso {

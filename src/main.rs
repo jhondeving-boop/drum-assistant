@@ -1,17 +1,43 @@
-use crate::config::ConfigApp;
-use crate::core::logger::advertir;
-use crate::core::monitor::MonitorBateria;
-use battery::Manager;
-use futures_util::stream::StreamExt;
-use std::time::Duration;
-use zbus::Connection;
-use zbus::proxy;
-
 mod audio;
+mod battery;
 mod config;
 mod core;
+mod notification;
+mod signal;
 
-// Proxy para D-Bus UPower
+use audio::{AudioEvent, AudioService, AudioWorker};
+use battery::monitor::{AlertEvent, BatteryMonitor, MonitorConfig};
+use battery::service::{BatteryService, SysfsBatteryService};
+
+use config::Config;
+use futures_util::stream::StreamExt;
+use log::{error, info, warn};
+use notification::{DesktopNotification, NotificationService, Urgency};
+use std::time::Duration;
+use tokio::time;
+use zbus::proxy;
+use zbus::Connection;
+
+// ──────────────────────────────────────────────
+// Constantes de temporización
+// ──────────────────────────────────────────────
+
+/// Intervalo de polling rápido tras un evento D-Bus (400ms).
+const FAST_POLL_INTERVAL_MS: u64 = 400;
+
+/// Número de ciclos rápidos tras un evento D-Bus.
+const FAST_POLL_TICKS: u32 = 10;
+
+/// Intervalo de polling cuando no hay baterías detectadas.
+const NO_BATTERY_POLL_SECS: u64 = 60;
+
+/// Intervalo de polling en zona segura (lejos de umbrales).
+const SAFE_INTERVAL_SECS: u64 = 30;
+
+// ──────────────────────────────────────────────
+// Proxy D-Bus para UPower
+// ──────────────────────────────────────────────
+
 #[proxy(
     interface = "org.freedesktop.UPower",
     default_service = "org.freedesktop.UPower",
@@ -22,195 +48,254 @@ trait UPower {
     fn on_battery(&self) -> zbus::Result<bool>;
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Inicializar el gestor de batería
-    let mut manager = match Manager::new() {
-        Ok(m) => m,
-        Err(e) => {
-            advertir(&format!("No se pudo inicializar battery manager: {}", e));
-            return Err(e.into());
-        }
-    };
-    let config = ConfigApp::cargar();
+// ──────────────────────────────────────────────
+// Bucle principal
+// ──────────────────────────────────────────────
 
-    let mut monitores: Vec<MonitorBateria> = Vec::new();
-    let mut aviso_sin_bateria_emitido = false;
+/// Inicializa servicios y ejecuta el bucle híbrido event-driven + polling.
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config::load();
+    let mut battery_service = SysfsBatteryService::new();
+    let audio: Box<dyn AudioService> = Box::new(AudioWorker::new(config.volume));
+    let notification: Box<dyn NotificationService> = Box::new(DesktopNotification::new());
 
-    println!("🔊 Asistente de Batería activado (Modo Event-Driven UPower)...");
-    println!(
-        "Configuración: Baja <= {:.0}%, Alta >= {:.0}%, Repetición cada {}s",
-        config.umbral_baja, config.umbral_alta, config.cooldown_segundos
+    let mut monitors: Vec<BatteryMonitor> = Vec::new();
+    let mut no_battery_warning_sent = false;
+
+    let monitor_config = MonitorConfig::new(
+        config.low_threshold,
+        config.high_threshold,
+        config.cooldown_secs,
     );
 
-    // Conectar a D-Bus del sistema (System Bus) para escuchar a UPower
-    let conn = match Connection::system().await {
-        Ok(c) => c,
+    info!(
+        "Battery Assistant started. Low: {:.0}%, High: {:.0}%, Cooldown: {}s, Volume: {:.0}%",
+        config.low_threshold,
+        config.high_threshold,
+        config.cooldown_secs,
+        config.volume * 100.0
+    );
+
+    let connection = match Connection::system().await {
+        Ok(c) => Some(c),
         Err(e) => {
-            advertir(&format!("No se pudo conectar a D-Bus (System): {}. Fallback al polling.", e));
-            // Si D-Bus falla, usamos el bucle fallback de siempre
-            run_fallback_loop(&mut manager, config, &mut monitores, &mut aviso_sin_bateria_emitido).await;
-            return Ok(());
+            warn!("D-Bus unavailable: {e}. Falling back to polling.");
+            None
         }
     };
 
-    let upower_proxy = match UPowerProxy::new(&conn).await {
-        Ok(p) => p,
-        Err(e) => {
-            advertir(&format!("No se pudo crear proxy de UPower: {}. Fallback al polling.", e));
-            run_fallback_loop(&mut manager, config, &mut monitores, &mut aviso_sin_bateria_emitido).await;
-            return Ok(());
-        }
-    };
-
-    // Suscribirse a cambios en las propiedades de UPower
-    let mut property_stream = upower_proxy.receive_on_battery_changed().await;
-
-    // Realizar un escaneo inicial al arrancar
-    procesar_baterias(&mut manager, config, &mut monitores, &mut aviso_sin_bateria_emitido);
-
-    let mut fast_poll_ticks = 0;
-
-    // Bucle principal híbrido (Event-Driven + Polling Lento)
-    loop {
-        // En cada iteración procesamos las baterías
-        let mut sleep_duration = procesar_baterias(&mut manager, config, &mut monitores, &mut aviso_sin_bateria_emitido);
-
-        // Si estamos en modo ráfaga tras un evento D-Bus, reducimos drásticamente la espera
-        if fast_poll_ticks > 0 {
-            sleep_duration = Duration::from_millis(400); // 400ms para latencia casi imperceptible
-            fast_poll_ticks -= 1;
-        }
-
-        // Dormimos, pero podemos ser "despertados" instantáneamente por D-Bus si conectas el cable
-        tokio::select! {
-            _ = tokio::time::sleep(sleep_duration) => {
-                // Despertó por tiempo (polling)
-            }
-            evento_dbus = property_stream.next() => {
-                if evento_dbus.is_some() {
-                    // Despertó instantáneamente porque UPower detectó el cable.
-                    // Activamos una ráfaga de lecturas rápidas para atrapar el momento exacto
-                    // en que `sysfs` (el sistema de archivos de batería de Linux) se actualiza.
-                    fast_poll_ticks = 10; // 10 * 400ms = 4 segundos de ráfaga
-                } else {
-                    // El stream de D-Bus se cerró (muy raro)
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                }
+    let upower_proxy = if let Some(ref conn) = connection {
+        match UPowerProxy::new(conn).await {
+            Ok(p) => Some(p),
+            Err(e) => {
+                warn!("UPower proxy failed: {e}. Falling back to polling.");
+                None
             }
         }
-    }
-}
-
-/// Fallback si D-Bus o UPower no están disponibles (como BSD u otros sistemas)
-async fn run_fallback_loop(
-    manager: &mut Manager,
-    config: ConfigApp,
-    monitores: &mut Vec<MonitorBateria>,
-    aviso_sin_bateria_emitido: &mut bool,
-) {
-    loop {
-        let sleep_duration = procesar_baterias(manager, config, monitores, aviso_sin_bateria_emitido);
-        tokio::time::sleep(sleep_duration).await;
-    }
-}
-
-/// Lógica extraída de lectura y evaluación de estado. Retorna el tiempo que debería dormir.
-fn procesar_baterias(
-    manager: &mut Manager,
-    config: ConfigApp,
-    monitores: &mut Vec<MonitorBateria>,
-    aviso_sin_bateria_emitido: &mut bool,
-) -> Duration {
-    // Para asegurarse de obtener datos frescos, a veces es necesario refrescar el manager entero
-    // en algunas combinaciones de kernel/battery crate, pero probaremos iterando normal.
-    let mut sleep_duration = Duration::from_secs(30);
-    
-    // Forzamos refresh al manager creándolo de nuevo para evitar caché de sysfs
-    if let Ok(new_manager) = Manager::new() {
-        *manager = new_manager;
-    }
-
-    match manager.batteries() {
-        Ok(baterias) => {
-            let mut ok_index = 0usize;
-
-            for battery_result in baterias {
-                match battery_result {
-                    Ok(bateria) => {
-                        asegurar_monitor_en_indice(monitores, ok_index, config, &bateria);
-
-                        let current_sleep = monitores[ok_index].tiempo_espera_dinamico(&bateria);
-                        if current_sleep < sleep_duration {
-                            sleep_duration = current_sleep;
-                        }
-
-                        ok_index += 1;
-                    }
-                    Err(err) => {
-                        advertir(&format!("No se pudo leer el estado de una bateria: {}", err));
-                    }
-                }
-            }
-
-            recortar_monitores_activos(monitores, ok_index);
-
-            if ok_index == 0 {
-                if !*aviso_sin_bateria_emitido {
-                    advertir("No se detectaron baterías en el sistema.");
-                    *aviso_sin_bateria_emitido = true;
-                }
-            } else {
-                *aviso_sin_bateria_emitido = false;
-            }
-        }
-        Err(err) => {
-            advertir(&format!("No se pudo enumerar las baterías del sistema: {}", err));
-        }
-    }
-
-    sleep_duration
-}
-
-fn asegurar_monitor_en_indice(
-    monitores: &mut Vec<MonitorBateria>,
-    index: usize,
-    config: ConfigApp,
-    bateria: &battery::Battery,
-) {
-    if monitores.len() <= index {
-        let mut monitor = MonitorBateria::new(config);
-        monitor.inicializar(bateria);
-        monitores.push(monitor);
     } else {
-        monitores[index].procesar_ciclo(bateria);
+        None
+    };
+
+    let mut property_stream = if let Some(ref proxy) = upower_proxy {
+        Some(proxy.receive_on_battery_changed().await)
+    } else {
+        None
+    };
+
+    process_batteries(
+        &mut battery_service,
+        &mut monitors,
+        &monitor_config,
+        &mut no_battery_warning_sent,
+        &*audio,
+        &*notification,
+    );
+
+    let mut fast_poll_remaining = 0u32;
+
+    loop {
+        let sleep = process_batteries(
+            &mut battery_service,
+            &mut monitors,
+            &monitor_config,
+            &mut no_battery_warning_sent,
+            &*audio,
+            &*notification,
+        );
+
+        if fast_poll_remaining > 0 {
+            let wait = Duration::from_millis(FAST_POLL_INTERVAL_MS);
+            fast_poll_remaining -= 1;
+            tokio::select! {
+                _ = time::sleep(wait) => {}
+                Some(_) = async {
+                    property_stream.as_mut()?.next().await
+                } => {
+                    fast_poll_remaining = FAST_POLL_TICKS;
+                }
+            }
+        } else if let Some(ref mut stream) = property_stream {
+            tokio::select! {
+                _ = time::sleep(sleep) => {}
+                Some(_) = stream.next() => {
+                    fast_poll_remaining = FAST_POLL_TICKS;
+                }
+            }
+        } else {
+            time::sleep(sleep).await;
+        }
     }
 }
 
-fn recortar_monitores_activos<T>(items: &mut Vec<T>, active_count: usize) {
-    if items.len() > active_count {
-        items.truncate(active_count);
+// ──────────────────────────────────────────────
+// Procesamiento de baterías
+// ──────────────────────────────────────────────
+
+/// Lee todas las baterías, actualiza los monitores y dispara eventos.
+/// Retorna el tiempo de sleep recomendado (el menor entre todas las baterías).
+fn process_batteries(
+    service: &mut dyn BatteryService,
+    monitors: &mut Vec<BatteryMonitor>,
+    config: &MonitorConfig,
+    no_battery_sent: &mut bool,
+    audio: &dyn AudioService,
+    notification: &dyn NotificationService,
+) -> Duration {
+    match service.batteries() {
+        Ok(batteries) if batteries.is_empty() => {
+            if !*no_battery_sent {
+                warn!("No batteries detected in the system.");
+                *no_battery_sent = true;
+            }
+            Duration::from_secs(NO_BATTERY_POLL_SECS)
+        }
+        Ok(batteries) => {
+            let count = batteries.len();
+            ensure_monitor_count(monitors, count, config);
+
+            let mut shortest_sleep = Duration::from_secs(SAFE_INTERVAL_SECS);
+
+            for (i, data) in batteries.iter().enumerate() {
+                if let Some(monitor) = monitors.get_mut(i) {
+                    if !monitor.is_initialized() {
+                        monitor.initialize(data);
+                    }
+
+                    let current_sleep = monitor.dynamic_sleep(data);
+                    if current_sleep < shortest_sleep {
+                        shortest_sleep = current_sleep;
+                    }
+
+                    let events = monitor.process_cycle(data);
+                    handle_events(&events, audio, notification);
+                }
+            }
+
+            *no_battery_sent = false;
+            shortest_sleep
+        }
+        Err(e) => {
+            error!("Failed to enumerate batteries: {e}");
+            Duration::from_secs(NO_BATTERY_POLL_SECS)
+        }
     }
+}
+
+/// Ajusta el vector de monitores para que tenga exactamente `count` entradas.
+fn ensure_monitor_count(monitors: &mut Vec<BatteryMonitor>, count: usize, config: &MonitorConfig) {
+    while monitors.len() < count {
+        monitors.push(BatteryMonitor::new(config.clone()));
+    }
+    monitors.truncate(count);
+}
+
+/// Procesa una lista de eventos: envía notificación de escritorio y reproduce audio.
+fn handle_events(
+    events: &[AlertEvent],
+    audio: &dyn AudioService,
+    notification: &dyn NotificationService,
+) {
+    for event in events {
+        match *event {
+            AlertEvent::ChargerConnected => {
+                info!("Charger connected");
+                notification.notify("Power", "Charger connected", Urgency::Normal);
+                audio.play(AudioEvent::Connected);
+            }
+            AlertEvent::ChargerDisconnected => {
+                info!("Charger disconnected");
+                notification.notify("Power", "Running on battery power", Urgency::Normal);
+                audio.play(AudioEvent::Disconnected);
+            }
+            AlertEvent::LowBattery {
+                percentage,
+                time_to_empty,
+            } => {
+                let remaining = time_to_empty
+                    .map(|d| {
+                        format!(
+                            " Estimated {:.0} min remaining.",
+                            d.as_secs_f64() / 60.0
+                        )
+                    })
+                    .unwrap_or_default();
+                let msg =
+                    format!("Critical level: {percentage:.0}%. Connect the charger.{remaining}");
+                info!("{msg}");
+                notification.notify("Low Battery", &msg, Urgency::Critical);
+                audio.play(AudioEvent::LowBattery);
+            }
+            AlertEvent::HighBattery {
+                percentage,
+                time_to_full,
+            } => {
+                let eta = time_to_full
+                    .filter(|d| d.as_secs() > 0)
+                    .map(|d| format!(" {:.0} min to full.", d.as_secs_f64() / 60.0))
+                    .unwrap_or_default();
+                let msg = format!(
+                    "Level reached: {percentage:.0}%. Unplug to preserve battery life.{eta}"
+                );
+                info!("{msg}");
+                notification.notify("Battery Full", &msg, Urgency::Normal);
+                audio.play(AudioEvent::HighBattery);
+            }
+        }
+    }
+}
+
+// ──────────────────────────────────────────────
+// Entry point
+// ──────────────────────────────────────────────
+
+#[tokio::main]
+async fn main() {
+    core::logger::init();
+    info!("Starting Battery Assistant...");
+
+    let handle = tokio::spawn(async {
+        if let Err(e) = run().await {
+            error!("Fatal error: {e}");
+        }
+    });
+
+    signal::wait_for_shutdown().await;
+    info!("Shutting down...");
+    handle.abort();
 }
 
 #[cfg(test)]
 mod tests {
-    use super::recortar_monitores_activos;
+    use super::*;
 
     #[test]
-    fn recortar_monitores_activos_recorta_exceso() {
-        let mut values = vec![1, 2, 3, 4];
-        recortar_monitores_activos(&mut values, 2);
-        assert_eq!(values, vec![1, 2]);
-    }
+    fn ensure_monitor_count_grows_correctly() {
+        let config = MonitorConfig::new(20.0, 80.0, 60);
+        let mut monitors = Vec::new();
+        ensure_monitor_count(&mut monitors, 2, &config);
+        assert_eq!(monitors.len(), 2);
 
-    #[test]
-    fn recortar_monitores_activos_conserva_si_no_hay_exceso() {
-        let mut values = vec![1, 2];
-        recortar_monitores_activos(&mut values, 2);
-        assert_eq!(values, vec![1, 2]);
-
-        recortar_monitores_activos(&mut values, 3);
-        assert_eq!(values, vec![1, 2]);
+        ensure_monitor_count(&mut monitors, 1, &config);
+        assert_eq!(monitors.len(), 1);
     }
 }

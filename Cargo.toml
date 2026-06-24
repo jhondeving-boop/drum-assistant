@@ -1,9 +1,9 @@
 [package]
 name = "battery_assistant"
-version = "1.1.0"
+version = "2.0.0"
 edition = "2024"
 authors = ["Jhonny"]
-description = "Asistente de batería para Linux con notificaciones de audio"
+description = "Battery monitoring daemon with audio notifications for Linux"
 license = "MIT"
 repository = "https://github.com/jhondeving-boop/asistente_bateria"
 keywords = ["battery", "linux", "notification", "audio"]
@@ -11,10 +11,16 @@ categories = ["command-line-utilities"]
 
 [dependencies]
 zbus = "5.1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "signal"] }
 futures-util = "0.3"
 battery = "0.7"
 notify-rust = "4"
 rodio = { version = "0.19", default-features = false, features = ["minimp3"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+log = "0.4"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

@@ -1,69 +1,86 @@
-use crate::core::logger;
+use log::warn;
 use rodio::{Decoder, OutputStream, Sink};
 use std::io::Cursor;
+use std::sync::mpsc;
 use std::thread;
 
-/// Definimos los posibles eventos de audio que el sistema puede emitir.
-pub enum EventoAudio {
-    Conectado,
-    Desconectado,
-    BateriaBaja,
-    BateriaCargada,
+// ──────────────────────────────────────────────
+// Assets de audio embebidos en el binario
+// ──────────────────────────────────────────────
+
+const AUDIO_CONNECTED: &[u8] = include_bytes!("../assets/conectado.mp3");
+const AUDIO_DISCONNECTED: &[u8] = include_bytes!("../assets/desconectado.mp3");
+const AUDIO_LOW: &[u8] = include_bytes!("../assets/baja.mp3");
+const AUDIO_FULL: &[u8] = include_bytes!("../assets/cargada.mp3");
+
+/// Evento de audio que puede ser reproducido.
+#[derive(Debug, Clone)]
+pub enum AudioEvent {
+    Connected,
+    Disconnected,
+    LowBattery,
+    HighBattery,
 }
 
-/// Embebemos los archivos de audio en el binario compilado.
-/// Esto elimina por completo el I/O de disco (0% uso de disco) al momento de reproducir alertas,
-/// mejorando radicalmente la latencia y previniendo fallos si los archivos son movidos.
-const AUDIO_CONECTADO: &[u8] = include_bytes!("../assets/conectado.mp3");
-const AUDIO_DESCONECTADO: &[u8] = include_bytes!("../assets/desconectado.mp3");
-const AUDIO_BAJA: &[u8] = include_bytes!("../assets/baja.mp3");
-const AUDIO_CARGADA: &[u8] = include_bytes!("../assets/cargada.mp3");
+/// Abstracción del sistema de audio.
+pub trait AudioService: Send {
+    /// Solicita la reproducción de un evento de audio (no bloqueante).
+    fn play(&self, event: AudioEvent);
+}
 
-/// Reproduce un sonido basado en el evento, procesado totalmente en memoria (RAM).
-pub fn reproducir_sonido(evento: EventoAudio) {
-    // Seleccionamos los bytes correctos según el evento
-    let bytes_audio = match evento {
-        EventoAudio::Conectado => AUDIO_CONECTADO,
-        EventoAudio::Desconectado => AUDIO_DESCONECTADO,
-        EventoAudio::BateriaBaja => AUDIO_BAJA,
-        EventoAudio::BateriaCargada => AUDIO_CARGADA,
-    };
+/// Worker de audio con un hilo dedicado y cola interna.
+/// Evita crear un thread por cada evento (antes usaba `thread::spawn` por alerta).
+#[derive(Clone)]
+pub struct AudioWorker {
+    sender: mpsc::Sender<AudioEvent>,
+}
 
-    // Lanzamos un hilo ligero para no bloquear la ejecución del monitor principal
-    thread::spawn(move || {
-        // Inicializamos la salida de audio del sistema (PipeWire / PulseAudio / ALSA)
-        let (_stream, stream_handle) = match OutputStream::try_default() {
-            Ok(v) => v,
-            Err(err) => {
-                logger::advertir(&format!("No se pudo inicializar salida de audio: {}", err));
-                return;
-            }
+impl AudioWorker {
+    /// Crea el worker, lanza el hilo interno y retorna el handle.
+    /// `volume` debe estar entre 0.0 y 1.0.
+    pub fn new(volume: f32) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            Self::run_worker(receiver, volume);
+        });
+        Self { sender }
+    }
+
+    /// Bucle interno del worker: procesa eventos en cola secuencialmente.
+    fn run_worker(rx: mpsc::Receiver<AudioEvent>, volume: f32) {
+        let Ok((_stream, handle)) = OutputStream::try_default() else {
+            warn!("Failed to initialize audio output. Audio disabled.");
+            return;
         };
 
-        let sink = match Sink::try_new(&stream_handle) {
-            Ok(s) => s,
-            Err(err) => {
-                logger::advertir(&format!("No se pudo crear sink de audio: {}", err));
-                return;
-            }
-        };
+        for event in rx {
+            let bytes = match event {
+                AudioEvent::Connected => AUDIO_CONNECTED,
+                AudioEvent::Disconnected => AUDIO_DISCONNECTED,
+                AudioEvent::LowBattery => AUDIO_LOW,
+                AudioEvent::HighBattery => AUDIO_FULL,
+            };
 
-        // Envolvemos los bytes estáticos en un Cursor, que simula un archivo pero en memoria RAM
-        let cursor = Cursor::new(bytes_audio);
+            let cursor = Cursor::new(bytes);
+            let Ok(source) = Decoder::new(cursor) else {
+                warn!("Failed to decode audio for event {event:?}");
+                continue;
+            };
 
-        let source = match Decoder::new(cursor) {
-            Ok(s) => s,
-            Err(err) => {
-                logger::advertir(&format!(
-                    "No se pudo decodificar el audio en memoria: {}",
-                    err
-                ));
-                return;
-            }
-        };
+            let Ok(sink) = Sink::try_new(&handle) else {
+                warn!("Failed to create audio sink");
+                continue;
+            };
 
-        sink.append(source);
-        // El hilo espera hasta que el sonido termine de reproducirse antes de morir
-        sink.sleep_until_end();
-    });
+            sink.set_volume(volume);
+            sink.append(source);
+            sink.detach();
+        }
+    }
+}
+
+impl AudioService for AudioWorker {
+    fn play(&self, event: AudioEvent) {
+        let _ = self.sender.send(event);
+    }
 }

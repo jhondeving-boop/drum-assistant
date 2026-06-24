@@ -1,10 +1,10 @@
 use crate::audio::{EventoAudio, reproducir_sonido};
 use crate::config::ConfigApp;
-use crate::logger;
+use crate::core::logger;
 use battery::units::ratio::percent;
 use battery::units::time::minute;
 use battery::{Battery, State};
-use notify_rust::{Notification, Timeout, Urgency};
+use notify_rust::{Hint, Notification, Timeout, Urgency};
 use std::time::{Duration, Instant};
 
 /// Gestiona el estado y las alertas para una batería específica
@@ -177,12 +177,19 @@ impl MonitorBateria {
         notif
             .summary(titulo)
             .body(cuerpo)
-            .icon("battery") // Intenta usar icono nativo del sistema
+            .appname("battery-assistant")
+            .icon("battery")
             .urgency(urgencia);
 
-        // Si es crítica (Hyprland / Mako), forzamos que no desaparezca sola
-        if urgencia == Urgency::Critical {
-            notif.timeout(Timeout::Never);
+        match urgencia {
+            Urgency::Critical => {
+                notif
+                    .hint(Hint::Resident(true))
+                    .timeout(Timeout::Never);
+            }
+            _ => {
+                notif.hint(Hint::Transient(true));
+            }
         }
 
         if let Err(err) = notif.show() {

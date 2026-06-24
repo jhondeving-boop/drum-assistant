@@ -193,10 +193,15 @@ echo "   ...deteniendo servicio actual si existe"
 systemctl --user stop battery-assistant 2>/dev/null || true
 ok "Servicio detenido (si existia)"
 
-echo "   ...copiando ejecutable (requiere sudo)"
-sudo install -m 755 target/release/battery_assistant /usr/local/bin/battery-assistant.new
-sudo mv /usr/local/bin/battery-assistant.new /usr/local/bin/battery-assistant
+echo "   ...copiando ejecutable a ~/.local/bin/"
+mkdir -p "$HOME/.local/bin"
+install -m 755 target/release/battery_assistant "$HOME/.local/bin/battery-assistant"
 ok "Ejecutable instalado"
+
+if ! echo "$PATH" | tr ':' '\n' | grep -qxF "$HOME/.local/bin"; then
+    echo "   ⚠️  ~/.local/bin no está en PATH. Agrega esta línea a tu ~/.bashrc:"
+    echo "      export PATH=\"\$HOME/.local/bin:\$PATH\""
+fi
 paso_completado
 
 paso "Configurando servicio systemd"
@@ -224,7 +229,7 @@ echo ""
 echo "✅ Instalacion completada"
 echo "⏱ Tiempo total: $((SECONDS - INSTALL_TIMER))s"
 echo ""
-echo "📍 Ejecutable: /usr/local/bin/battery-assistant"
+echo "📍 Ejecutable: $HOME/.local/bin/battery-assistant"
 echo "⚙️  Servicio: $HOME/.config/systemd/user/battery-assistant.service"
 echo ""
 echo "Estado del servicio:"

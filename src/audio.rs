@@ -1,4 +1,4 @@
-use crate::logger;
+use crate::core::logger;
 use rodio::{Decoder, OutputStream, Sink};
 use std::io::Cursor;
 use std::thread;

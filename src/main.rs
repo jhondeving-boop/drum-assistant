@@ -1,6 +1,6 @@
 use crate::config::ConfigApp;
-use crate::logger::advertir;
-use crate::monitor::MonitorBateria;
+use crate::core::logger::advertir;
+use crate::core::monitor::MonitorBateria;
 use battery::Manager;
 use futures_util::stream::StreamExt;
 use std::time::Duration;
@@ -9,8 +9,7 @@ use zbus::proxy;
 
 mod audio;
 mod config;
-mod logger;
-mod monitor;
+mod core;
 
 // Proxy para D-Bus UPower
 #[proxy(

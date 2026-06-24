@@ -65,6 +65,49 @@ Desinstalar el asistente es igual de fácil. Hemos incluido un script que elimin
 ./uninstall.sh
 ```
 
+## 🎨 Modo oscuro (Notificaciones)
+
+Las notificaciones se muestran a través del daemon de notificaciones de tu escritorio.
+Para que se vean correctamente en un tema oscuro, configura tu daemon:
+
+### Mako (Hyprland / Wayland)
+Edita `~/.config/mako/config` o créalo:
+
+```ini
+font=monospace 10
+background-color=#1e1e2e
+text-color=#cdd6f4
+border-color=#89b4fa
+border-size=2
+border-radius=6
+padding=12
+margin=12
+default-timeout=5000
+
+[appname=battery-assistant]
+background-color=#1e1e2e
+text-color=#cdd6f4
+border-color=#f38ba8
+```
+
+### Dunst
+Edita `~/.config/dunst/dunstrc`:
+
+```ini
+[global]
+background = "#1e1e2e"
+foreground = "#cdd6f4"
+frame_color = "#89b4fa"
+
+[battery-assistant]
+appname = "battery-assistant"
+background = "#1e1e2e"
+foreground = "#cdd6f4"
+frame_color = "#f38ba8"
+```
+
+> El `appname` **battery-assistant** ya está configurado en el código para que el daemon pueda aplicar estas reglas específicas.
+
 ## 🔄 Cómo actualizar
 
 Si en el futuro descargas una versión más reciente con `git pull`, solo vuelve a correr el comando `./install.sh`. Se encargará de detener el servicio viejo, recompilar la aplicación más reciente y volver a arrancar sin que tú tengas que tocar nada más.

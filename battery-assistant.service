@@ -3,7 +3,7 @@ Description=Battery Assistant Service
 After=sound.target
 
 [Service]
-ExecStart=/usr/local/bin/battery-assistant
+ExecStart=%h/.local/bin/battery-assistant
 Restart=always
 RestartSec=5
 
